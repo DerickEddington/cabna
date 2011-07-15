@@ -1,0 +1,98 @@
+;; The calling convention implemented by the macros in this file does not
+;; support nested procedure calls, because the pointer to a return instruction
+;; is passed in a register.  Users of these macros must understand how and when
+;; registers are overwritten, and users must understand if they need to do
+;; anything to deal with register mutation.  The envisioned usage is that called
+;; procedures do not call other procedures, i.e. the call-depth only goes to 1.
+
+
+%define arg1 r8
+%define arg2 r9
+%define arg3 r10
+%define arg4 r11
+%define arg5 r12
+%define arg6 r13
+%define arg7 r14
+%define argr r15
+
+
+%macro call 1
+  mov argr, %%continuation
+  jmp %1
+  %%continuation:
+%endmacro
+
+%macro call 2
+  mov arg1, %2
+  call %1
+%endmacro
+
+%macro call 3
+  mov arg2, %3
+  call %1 %2
+%endmacro
+
+%macro call 4
+  mov arg3, %4
+  call %1 %2 %3
+%endmacro
+
+%macro call 5
+  mov arg4, %5
+  call %1 %2 %3 %4
+%endmacro
+
+%macro call 6
+  mov arg5, %6
+  call %1 %2 %3 %4 %5
+%endmacro
+
+%macro call 7
+  mov arg6, %7
+  call %1 %2 %3 %4 %5 %6
+%endmacro
+
+%macro call 8
+  mov arg7, %8
+  call %1 %2 %3 %4 %5 %6 %7
+%endmacro
+
+
+%macro return 0
+  jmp argr
+%endmacro
+
+%macro return 1
+  mov arg1, %1
+  return
+%endmacro
+
+%macro return 2
+  mov arg2, %2
+  return %1
+%endmacro
+
+%macro return 3
+  mov arg3, %3
+  return %1 %2
+%endmacro
+
+%macro return 4
+  mov arg4, %4
+  return %1 %2 %3
+%endmacro
+
+%macro return 5
+  mov arg5, %5
+  return %1 %2 %3 %4
+%endmacro
+
+%macro return 6
+  mov arg6, %6
+  return %1 %2 %3 %4 %5
+%endmacro
+
+%macro return 7
+  mov arg7, %7
+  return %1 %2 %3 %4 %5 %6
+%endmacro

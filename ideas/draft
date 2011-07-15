@@ -1,0 +1,102 @@
+; The order of the structs' fields is required for cmpxchg16b techniques.
+
+struct queue
+  head
+  tail
+
+struct node
+  head-of
+  locked
+  tail-of
+  next
+
+; User's responsibility: Node items must not be in more than one queue at a time.
+
+define dequeue ( queue* q-r )
+  mov rdx , q-r
+  mov rax , false
+  mov rcx , null
+  mov rbx , true
+  mov head-r , [q-r.head]
+  cmp head-r , null
+  je empty
+  ; If it's our head and not locked, we can use it.
+  ; If it's our head but locked, another thread is using it in enqueue.
+  ; If it's no longer our head, we cannot use it.
+  lock cmpxchg16b [head-r.head-of/locked]
+  jne dequeue ; Another processor interfered concurrently.
+  mov arg2-r , head-r
+  mov head-r , [arg2-r.next]
+  cmp head-r , null
+  je also-is-tail
+  mov rbx , true
+head-spin:
+  mov rax , false
+  lock cmpxchg [head-r.locked] , rbx
+  jne head-spin
+  mov [head-r.head-of] , q-r
+  mov [head-r.locked] , false
+  mov [q-r.head] , head-r
+done:
+  mov [arg2-r.tail-of] , null
+  mov [arg2-r.next] , null
+  mov [arg2-r.locked] , false
+  mov arg1-r , true
+  ; arg2-r already set.
+  jmp argret-r
+also-is-tail:
+  mov rdx, arg2-r
+  mov rax, arg2-r
+  mov rcx, null
+  mov rbx, null
+  lock cmpxchg16b [q-r.head/tail]  ; Atomically change head and tail.
+  je done
+  jmp bug  ; The node is still locked, so unequal cmp not possible.
+empty:
+  mov arg1-r , false
+  jmp argret-r
+
+
+define enqueue ( queue* q-r , node* item-r )
+  mov [item-r.locked] , true  ; Probably already true, but make sure.
+try:
+  mov rdx , false
+  mov rax , q-r
+  mov rcx , true
+  mov rbx , null
+  mov tail-r , [q-r.tail]
+  cmp tail-r , null
+  je empty
+  ; If it's not locked and our tail, we can use it.
+  ; If it's locked and our tail, another thread is using it in dequeue.
+  ; If it's no longer our tail, we cannot use it.
+  lock cmpxchg16b [tail-r.locked/tail-of]
+  jne try ; Another processor interfered concurrently.
+  mov [tail-r.next] , item-r
+  mov [tail-r.locked] , false  ; At this point, the item node must be locked, and it is.
+  mov [q-r.tail] , item-r
+  mov [item-r.head-of] , null
+done:
+  mov [item-r.tail-of] , q-r
+  mov [item-r.next] , null
+  mov [item-r.locked] , false
+  mov arg1-r , true
+  jmp argret-r
+empty:
+  mov rdx , null
+  mov rax , null
+  mov rcx , item-r
+  mov rbx , item-r
+  lock cmpxchg16b [q-r.head/tail]  ; Insert as head and tail, atomically.
+  jne try ; Another processor interfered concurrently.
+  mov [item-r.head-of] , q-r
+  jmp done
+
+
+
+
+Idea: Test the implementation above by making all processors sleep for a
+random amount of time and then randomly choose whether to enqueue or dequeue
+and repeat endlessly while some kind of error detection is also constantly
+detecting.  If there are obscure concurrency bugs, I think long-running
+executions of this test will reveal many of them.
