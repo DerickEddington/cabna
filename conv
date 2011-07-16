@@ -1,18 +1,23 @@
-;; The calling convention implemented by the macros in this file does not
-;; support nested procedure calls, because the pointer to a return instruction
-;; is passed in a register.  Users of these macros must understand how and when
-;; registers are overwritten, and users must understand if they need to do
-;; anything to deal with register mutation.  The envisioned usage is that called
-;; procedures do not call other procedures, i.e. the call-depth only goes to 1.
+%define true  1
+%define false 0
+%define null  0
+
+
+; The calling convention implemented by the macros in this file does not support
+; nested procedure calls, because the pointer to a return instruction is passed
+; in a register.  Users of these macros must understand how and when registers
+; are overwritten, and users must understand if they need to do anything to deal
+; with register mutation.  The envisioned usage is that called procedures do not
+; call other procedures, i.e. the call-depth only goes to 1.
 
 
 %define arg1 r8
 %define arg2 r9
 %define arg3 r10
-%define arg4 r11
-%define arg5 r12
-%define arg6 r13
-%define arg7 r14
+; r11 isn't used because of its implicit use with syscall/sysret.
+%define arg4 r12
+%define arg5 r13
+%define arg6 r14
 %define argr r15
 
 
@@ -52,11 +57,6 @@
   call %1 %2 %3 %4 %5 %6
 %endmacro
 
-%macro call 8
-  mov arg7, %8
-  call %1 %2 %3 %4 %5 %6 %7
-%endmacro
-
 
 %macro return 0
   jmp argr
@@ -90,9 +90,4 @@
 %macro return 6
   mov arg6, %6
   return %1 %2 %3 %4 %5
-%endmacro
-
-%macro return 7
-  mov arg7, %7
-  return %1 %2 %3 %4 %5 %6
 %endmacro

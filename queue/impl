@@ -1,0 +1,169 @@
+; User's responsibility: Node items must not be in more than one queue at a time.
+
+; TODO: Investigate whether dequeue's lock-awareness of new_head is necessary.
+; I don't think it is because enqueue doesn't have to set item's .head_of
+; (because dequeued nodes should already have it set to null) and so there's no
+; possible conflict with setting new_head's .head_of in dequeue?
+
+; TODO: Describe the purpose and limits of this concurrent queue implementation
+; and that it's made just for Cabna.
+
+%include "conv"
+%include "queue/strucs"
+
+global enqueue
+global dequeue
+
+extern bug
+
+
+section .text
+
+%define q         arg1  ; Used by both enqueue and dequeue.
+%define item      arg2  ; Used by enqueue.
+%define tail      arg3  ; Used by enqueue.
+%define old_head  arg2  ; Used by dequeue.
+%define new_head  arg3  ; Used by dequeue.
+
+
+; enqueue:
+;   Arguments: 1) pointer to queue
+;              2) pointer to queue_node
+;   Returns: nothing
+;   Destroys: rax, rbx, rcx, rdx, arg3
+enqueue:
+  ; TODO: I think this can be omitted, because dequeue leaves nodes locked and
+  ; the .locked field is private.
+  ; Lock the item node.  It probably is locked already (because dequeue leaves
+  ; dequeued nodes locked), but make sure.  Because users must not put a node in
+  ; more than one queue at a time, this procedure can assume the item node is
+  ; not in a queue and therefore assume it can lock and use the item node
+  ; without checking whether it's already locked.  The item node must be locked
+  ; as explained below, and we do it here to avoid unnecessarily repeating the
+  ; operation if the .try loop happens.
+  mov qword [item + queue_node.locked], true
+.try:
+  ; Setup for the cmpxchg16b here, so the load of the queue's tail is as close
+  ; as possible to the cmpxchg16b, to minimize the chance of concurrent
+  ; interference.
+  mov rdx, false
+  mov rax, q
+  mov rcx, true
+  mov rbx, null
+  ; Get the queue's tail at this moment.  It might change before we get to
+  ; locking it, because of concurrent threads.
+  mov tail, [q + queue.tail]
+  cmp tail, null
+  je .empty
+  ; Atomically check if concurrent interference happened, and, if not, lock the
+  ; tail node for our use.  If it's not locked and still q's tail, we can use
+  ; it.  If it's locked and q's tail, another thread is using it in dequeue.  If
+  ; it's no longer q's tail, we cannot use it.  The .tail_of field is also read
+  ; and written, because the operation works on 16 bytes, and .tail_of follows
+  ; .locked in memory.  The 16-byte operation is used to test both fields,
+  ; instead of testing only .locked, because I think doing so reduces the chance
+  ; of concurrent contention that would be more likely if the node was locked
+  ; before checking if it's still q's tail.  We avoiding locking it if we don't
+  ; need to.
+  lock cmpxchg16b [tail + queue_node.locked]
+  jne .try ; Another processor interfered concurrently.
+  mov [tail + queue_node.next], item
+  ; Unlock the old tail node as soon as possible, so other threads can use it
+  ; ASAP, e.g. for other threads doing dequeue.  At this point, the item node
+  ; must be locked, and it is, because after the old tail is unlocked, another
+  ; thread might try to use our item node, e.g. if the old tail is also the
+  ; queue's head and another thread tries to dequeue.
+  mov qword [tail + queue_node.locked], false
+  ; At this point, the item node must be locked, because it becomes the queue's
+  ; tail but it is not yet ready, and so other threads wanting to use it must
+  ; wait.  Alternatively, setting the queue's tail could wait until the item
+  ; node is ready, because the old tail node's .tail_of field no longer refers
+  ; to the queue and this would also cause other threads to wait.  Setting the
+  ; queue tail here seems clearer.
+  mov [q + queue.tail], item
+  mov qword [item + queue_node.head_of], null ; TODO: Necessary?
+.done:
+  mov [item + queue_node.tail_of], q
+  mov qword [item + queue_node.next], null
+  ; Unlock the item, which is now the queue's tail, and allow other threads to
+  ; use it.
+  mov qword [item + queue_node.locked], false
+  return
+.empty:
+  ; Insert as head and tail, atomically.
+  mov rdx, null
+  mov rax, null
+  mov rcx, item
+  mov rbx, item
+  ; The queue's .tail field is also read and written by this 16-byte operation.
+  ; Like above, the item node must be locked.
+  lock cmpxchg16b [q + queue.head]
+  jne .try ; Another processor interfered concurrently.
+  mov [item + queue_node.head_of], q
+  jmp .done
+
+
+; dequeue:
+;   Arguments: 1) pointer to queue
+;   Returns: 1) true or false for success or failure
+;            2) pointer to queue_node if success
+;   Destroys: rax, rbx, rcx, rdx, arg1, arg2, arg3
+dequeue:
+  ; Setup for the cmpxchg16b here, so the load of the queue's head is as close
+  ; as possible to the cmpxchg16b, to minimize the chance of concurrent
+  ; interference.
+  mov rdx, q
+  mov rax, false
+  mov rcx, null
+  mov rbx, true
+  ; Get the queue's head at this moment.  It might change before we get to
+  ; locking it, because of concurrent threads.
+  mov old_head, [q + queue.head]
+  cmp old_head, null
+  je .empty
+  ; Atomically check if concurrent interference happened, and, if not, lock the
+  ; head node for our use.  If it's not locked and still q's head, we can use
+  ; it.  If it's locked and q's head, another thread is using it in enqueue.  If
+  ; it's no longer q's head, we cannot use it.  The .locked field is also read
+  ; and written, because the operation works on 16 bytes, and .locked follows
+  ; .head_of in memory.
+  lock cmpxchg16b [old_head + queue_node.head_of]
+  jne dequeue ; Another processor interfered concurrently.
+  mov new_head, [old_head + queue_node.next]
+  cmp new_head, null
+  je .also_tail
+  ; Check if the new head node is locked, before using.  It might be locked if
+  ; it's also the tail and another thread is using it in enqueue.
+  mov rbx, true
+.head_spin:
+  mov rax, false
+  lock cmpxchg [new_head + queue_node.locked], rbx
+  jne .head_spin
+  mov [new_head + queue_node.head_of], q
+  ; Unlock the new head as soon as possible, so other threads can use it ASAP,
+  ; e.g. for other threads doing enqueue when the node is also the tail.
+  mov qword [new_head + queue_node.locked], false
+  ; Set the queue's new head ASAP, so other threads doing dequeue or enqueue can
+  ; use it ASAP.
+  mov [q + queue.head], new_head
+.done:
+  mov qword [old_head + queue_node.tail_of], null
+  mov qword [old_head + queue_node.next], null
+  ;mov [old_head + queue_node.locked], false  ; enqueue might rely on dequeued nodes being locked.
+  ; Return success.
+  return true  ; old_head is already arg2.
+.also_tail:
+  ; Remove head and tail, atomically.
+  mov rdx, old_head
+  mov rax, old_head
+  mov rcx, null
+  mov rbx, null
+  ; The queue's .tail field is also read and written by this 16-byte operation.
+  ; Here, cmpxchg16b is used only for 16-byte write atomicity, not for
+  ; comparison.
+  lock cmpxchg16b [q + queue.head]
+  je .done
+  jmp bug  ; The queue's head node is still locked, so unequal cmp not possible.
+.empty:
+  ; Return failure.
+  return false

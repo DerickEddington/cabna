@@ -1,0 +1,5 @@
+; User's responsibility: Node items must not be in more than one queue at a time.
+
+%include "queue/strucs"
+extern enqueue
+extern dequeue

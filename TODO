@@ -1,3 +1,5 @@
-Commit in RCS my present work, even though it will change
-much.  I like the idea of recording the first blundering
-steps.
+Use DEFAULT REL for RIP-relative addressing.  Make new
+"directives" file for inclusion by project files.
+
+Investigate opportunities to optimize assembly source for
+speed and size.
