@@ -1,2 +1,18 @@
-Investigate opportunities to optimize assembly source for
-speed and size, such as "mov byte" instead of "mov qword".
+Investigate whether return values register assignments instead should be the
+same order as argument values, so that return continuations can be called like
+procedures -- continuation-passing style.
+
+Brainstorm an example of what the following could compile to: returning a value
+to a waiting task and checking if the waiting task is ready to be queued.
+
+Investigate opportunities to optimize assembly source for speed and size, such
+as "mov byte" instead of "mov qword".
+
+Implement thread creation per number of processors, at program start-up.  This
+will allow exploring parallelism, even though the thread creation design might
+change in the future.  I think using Linux's clone is the way to go.
+
+Make a simple Scheme-like interpreter written in assembly and using the task
+queueing and execution facilities.  I think this is an easy step towards using
+the parallel processing without having a compiler.  Useful parallel programs
+(including a compiler) can be interpreted.

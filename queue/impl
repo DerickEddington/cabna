@@ -20,18 +20,18 @@ extern bug
 
 section .text
 
-%define q         arg1  ; Used by both enqueue and dequeue.
-%define item      arg2  ; Used by enqueue.
-%define tail      arg3  ; Used by enqueue.
-%define old_head  arg2  ; Used by dequeue.
-%define new_head  arg3  ; Used by dequeue.
+%define q         arg1_r8   ; Used by both enqueue and dequeue.
+%define item      arg2_r9   ; Used by enqueue.
+%define tail      arg3_r10  ; Used by enqueue.
+%define old_head  arg2_r9   ; Used by dequeue.
+%define new_head  arg3_r10  ; Used by dequeue.
 
 
 
 ; enqueue:
 ;   Arguments: 1) pointer to queue; 2) pointer to queue_node
 ;   Returns: nothing
-;   Destroys: rax, rbx, rcx, rdx, arg3
+;   Destroys: rax, rbx, rcx, rdx, arg3_r10
 enqueue:
   ; Setup for the cmpxchg16b here, so the load of the queue's tail is as close
   ; as possible to the cmpxchg16b, to minimize the chance of concurrent
@@ -98,7 +98,7 @@ enqueue:
 ; dequeue:
 ;   Arguments: 1) pointer to queue
 ;   Returns: 1) pointer to queue_node, or null if queue empty
-;   Destroys: rax, rbx, rcx, rdx, arg1, arg2, arg3
+;   Destroys: rax, rbx, rcx, rdx, arg1_r8, arg2_r9, arg3_r10, ret1_r12
 dequeue:
   ; Setup for the cmpxchg16b here, so the load of the queue's head is as close
   ; as possible to the cmpxchg16b, to minimize the chance of concurrent

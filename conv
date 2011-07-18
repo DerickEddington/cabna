@@ -4,11 +4,14 @@
 
 
 ; A thread's task queue.
-%define ttq r15
+%define ttq_r15 r15
 
 %macro enqueue_task 1
-  call enqueue, ttq, %1
+  call enqueue, ttq_r15, %1
 %endmacro
+
+; A thread's currently executing task.
+%define cet_r14 r14
 
 
 ; The calling convention implemented by the macros in this file does not support
@@ -19,66 +22,64 @@
 ; call other procedures, i.e. the call-depth only goes to 1.
 
 
-%define arg1 r8
-%define arg2 r9
-%define arg3 r10
+; Procedure call arguments, including return-instruction (continuation) as last
+; argument.
+%define arg1_r8   r8
+%define arg2_r9   r9
+%define arg3_r10  r10
 ; r11 isn't used because of its implicit use with syscall/sysret.
-%define arg4 r12
-%define arg5 r13
-%define argr r14
+%define arg4_r12  r12
+%define argr_r13  r13
 
-%define ret1 arg5
-%define ret2 arg4
-%define ret3 arg3
+; Return values.  In reverse order of arguments, to avoid destroying arguments
+; if possible.
+%define ret1_r12  arg4_r12
+%define ret2_r10  arg3_r10
+%define ret3_r9   arg2_r9
 
 
 %macro call 1
-  mov argr, %%continuation
+  mov argr_r13, %%continuation
   jmp %1
   %%continuation:
 %endmacro
 
 %macro call 2
-  mov arg1, %2
+  mov arg1_r8, %2
   call %1
 %endmacro
 
 %macro call 3
-  mov arg2, %3
+  mov arg2_r9, %3
   call %1 %2
 %endmacro
 
 %macro call 4
-  mov arg3, %4
+  mov arg3_r10, %4
   call %1 %2 %3
 %endmacro
 
 %macro call 5
-  mov arg4, %5
+  mov arg4_r12, %5
   call %1 %2 %3 %4
-%endmacro
-
-%macro call 6
-  mov arg5, %6
-  call %1 %2 %3 %4 %5
 %endmacro
 
 
 %macro return 0
-  jmp argr
+  jmp argr_r13
 %endmacro
 
 %macro return 1
-  mov ret1, %1
+  mov ret1_r12, %1
   return
 %endmacro
 
 %macro return 2
-  mov ret2, %2
+  mov ret2_r10, %2
   return %1
 %endmacro
 
 %macro return 3
-  mov ret3, %3
+  mov ret3_r9, %3
   return %1 %2
 %endmacro
