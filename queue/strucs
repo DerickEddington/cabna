@@ -6,6 +6,7 @@
 struc queue
   .head: resq 1
   .tail: resq 1
+  .next: resq 1
 endstruc
 
 struc queue_node

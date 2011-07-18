@@ -3,6 +3,14 @@
 %define null  0
 
 
+; A thread's task queue.
+%define ttq r15
+
+%macro enqueue_task 1
+  call enqueue, ttq, %1
+%endmacro
+
+
 ; The calling convention implemented by the macros in this file does not support
 ; nested procedure calls, because the pointer to a return instruction is passed
 ; in a register.  Users of these macros must understand how and when registers
@@ -17,8 +25,11 @@
 ; r11 isn't used because of its implicit use with syscall/sysret.
 %define arg4 r12
 %define arg5 r13
-%define arg6 r14
-%define argr r15
+%define argr r14
+
+%define ret1 arg5
+%define ret2 arg4
+%define ret3 arg3
 
 
 %macro call 1
@@ -52,42 +63,22 @@
   call %1 %2 %3 %4 %5
 %endmacro
 
-%macro call 7
-  mov arg6, %7
-  call %1 %2 %3 %4 %5 %6
-%endmacro
-
 
 %macro return 0
   jmp argr
 %endmacro
 
 %macro return 1
-  mov arg1, %1
+  mov ret1, %1
   return
 %endmacro
 
 %macro return 2
-  mov arg2, %2
+  mov ret2, %2
   return %1
 %endmacro
 
 %macro return 3
-  mov arg3, %3
+  mov ret3, %3
   return %1 %2
-%endmacro
-
-%macro return 4
-  mov arg4, %4
-  return %1 %2 %3
-%endmacro
-
-%macro return 5
-  mov arg5, %5
-  return %1 %2 %3 %4
-%endmacro
-
-%macro return 6
-  mov arg6, %6
-  return %1 %2 %3 %4 %5
 %endmacro

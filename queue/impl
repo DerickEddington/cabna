@@ -1,3 +1,5 @@
+; TODO: All instructions which set a register to 0 should use xor instead.
+
 ; Users' responsibilities:
 ;  1) Nodes must not be in more than one queue at a time.
 ;  2) Nodes must not be in the same queue more than once.
@@ -7,13 +9,13 @@
 ; TODO: Describe the purpose and limits of this concurrent queue implementation
 ; and that it's made just for Cabna.
 
-%include "conv"
-%include "queue/strucs"
-
 global enqueue
 global dequeue
 
 extern bug
+
+%include "conv"
+%include "queue/strucs"
 
 
 section .text

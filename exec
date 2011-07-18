@@ -1,0 +1,48 @@
+global exec_task
+
+extern dequeue
+
+%include "conv"
+
+
+section .text
+
+exec_task:
+  mov arg1, ttq
+  mov argr, .cont
+.get:
+  jmp dequeue
+.cont:
+  cmp ret1, null
+  jne [ret1 + task.exec]
+  ; Else, try to take a task from another thread.
+  mov arg1, [arg1 + queue.next]
+  jmp .get
+
+
+
+; Brainstorm -- What could a parallel evaluation of procedure arguments compile to?
+;               Expression: ((a) (b (c 1)))
+  alloc_task 1, 2
+  mov [ret1 + task.rcvr], whatever
+  mov [ret1 + task.ridx], whatever
+  mov t1, ret1
+
+  alloc_task 0, 0
+  mov [ret1 + task.exec], a
+  mov [ret1 + task.rcvr], t1
+  mov [ret1 + task.ridx], 0
+  enqueue_task ret1
+
+  alloc_task 1, 1
+  mov [ret1 + task.exec], b
+  mov [ret1 + task.rcvr], t1
+  mov [ret1 + task.ridx], 1
+  mov t2, ret1
+
+  alloc_task 1, 0
+  mov [ret1 + task.exec], c
+  mov [ret1 + task.rcvr], t2
+  mov [ret1 + task.ridx], 1
+  mov [ret1 + task.arg1], 1
+  enqueue_task ret1

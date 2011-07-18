@@ -1,7 +1,2 @@
-Investigate variation of queue implementation where the locks
-are the lowest bit of the pointers to nodes.  Is
-concurrency-safety possible?  Will require nodes' addresses
-to be aligned such that lowest bit can be ignored.
-
 Investigate opportunities to optimize assembly source for
 speed and size, such as "mov byte" instead of "mov qword".
