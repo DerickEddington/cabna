@@ -1,9 +1,17 @@
+Investigate if it's better to inline dequeue and enqueue via macros.  This will
+make things more efficient by avoiding always setting argument registers, and I
+think it will make the source simpler by avoiding dealing with register
+preservation.
+
+If above doesn't work, investigate if it's better to have dequeue be passed both
+success and failure continuations/instruction-pointers.  This seems more
+efficient because testing the return value for null won't be needed.  Also this
+seems better for using dequeue in the various places, where preserving argr
+requires saving it somewhere else.
+
 Investigate whether return values register assignments instead should be the
 same order as argument values, so that return continuations can be called like
 procedures -- continuation-passing style.
-
-Investigate opportunities to optimize assembly source for speed and size, such
-as "mov byte" instead of "mov qword".
 
 Implement thread creation per number of processors, at program start-up.  This
 will allow exploring parallelism, even though the thread creation design might
@@ -13,3 +21,6 @@ Make a simple Scheme-like interpreter written in assembly and using the task
 queueing and execution facilities.  I think this is an easy step towards using
 the parallel processing without having a compiler.  Useful parallel programs
 (including a compiler) can be interpreted.
+
+Investigate opportunities to optimize assembly source for speed and size, such
+as "mov byte" instead of "mov qword".

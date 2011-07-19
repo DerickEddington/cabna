@@ -69,8 +69,8 @@ b:
 supply:
   mov arg2_r9, [cet_r14 + task.rcvr]
   mov arg3_r10, [cet_r14 + task.ridx]
-  mov [arg2_r9 + task.exec + 8 * arg3_r10], arg1_r8
-  dealloc_task cet_r14
+  mov [arg2_r9 + task.arg + 8 * arg3_r10], arg1_r8
+  free cet_r14
   lock dec [arg2_r9 + task.need]
   jnz exec_task  ; rcvr needs more
   enqueue_task arg2_r9

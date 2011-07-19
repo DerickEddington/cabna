@@ -1,0 +1,6 @@
+%include "queue/strucs"
+
+struc block
+  .queue_node:  resb queue_node_size
+  .group:       resq 1
+endstruc

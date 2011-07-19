@@ -1,0 +1,15 @@
+%include "block"
+
+struc task
+  .block:  resb block_size
+  .rcvr:   resq 1
+  .ridx:   resq 1
+  .need:   resq 1
+  .arg:
+  .exec:   resq 1
+  ; From here, tasks have varying lengths.
+endstruc
+
+%assign task.arg1 task.arg + 8
+%assign task.arg2 task.arg + 16
+%assign task.arg3 task.arg + 24
