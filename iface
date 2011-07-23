@@ -1,0 +1,7 @@
+extern free_pet__exec_avail
+extern exec_avail
+extern enqueue_task
+extern alloc_task
+extern supply_retval
+
+%include "conv"
