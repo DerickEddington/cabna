@@ -18,13 +18,23 @@ extern bug
 
 section .text
 
-; TODO: Note what registers the procedures destroy.
+; TODO: Think about and note what registers the procedures destroy.
 
 ; Users' responsibilities:
 ;  1) Nodes must not be in more than one queue at a time.
 ;  2) Nodes must not be in the same queue more than once.
-;  3) The memory allocated by the OS for nodes must never be returned to the OS.
+;  3) Amount of argument fields requested when allocating a task must not exceed
+;     task_max_args.
+;  4) The memory allocated by the OS for nodes must never be returned to the OS.
 ; This implementation assumes that users obey these responsibilities.
+
+; Note about uses of cmpxchg16b: For queue nodes, the 16-byte operation is used
+; to atomically test both the .locked field and the .head_of or .tail_of field,
+; because I think doing so reduces the chance of concurrent contention that
+; would be more likely if the node was locked before checking if it's still the
+; queue's head or tail - we avoiding locking it if we don't need to.  For
+; queues, the 16-byte operation is used to atomically set the .head and .tail
+; fields, to maintain consistency under concurrency.
 
 ; TODO: Describe the purpose and limits of this concurrent queue implementation
 ; and that it's made just for Cabna.
@@ -33,36 +43,31 @@ section .text
 
 
 alloc_task:
-  ; !TODO!: What to do about this concurrency problem?: Multiple threads might
-  ; go into .mmap_new_page before a new page of blocks is added to the queue.
-  ; This can't be allowed to happen because other threads must wait for the new
-  ; page.  Somehow, the first to detect an empty queue must be the one to add
-  ; the new page of blocks, and any others must spin-wait.  What if a dummy
-  ; locked node is set as head, to exclude other threads; the first thread to
-  ; concurrently-safely set the previously-null head to the dummy wins and other
-  ; threads will spin-wait.  Multiple threads might race into .mmap_new_page and
-  ; try to set the dummy, but atomic operations allow only one to win and the
-  ; others to know they lost.
+  ; Get a free task struc having a requested amount of argument fields, argument
+  ; in arg1_r8, from a block group, or allocate more memory from the OS for it,
+  ; and return to ret_r13 with task pointer in arg2_r9.  The requested amount is
+  ; the amount of additional 64-bit fields following the task struc header,
+  ; i.e. we return a block the size of a task struc header plus 8 times the
+  ; requested size.
 
-  ; Try to get a block of a requested size, argument in arg1_r8, from a block
-  ; group, or allocate more memory from the OS for it, and return to ret_r13
-  ; with block pointer in arg2_r9.
-
-  lea arg4_r12, [block_groups + arg1_r8 * queue_size]
+  ; Select the queue for the requested size.
+  shl arg1_r8, 4  ; Multiply by the size of block queue strucs (16).
+  add arg1_r8, block_groups
 
   ; Setup for the cmpxchg16b here, so the load of the queue's head is as close
   ; as possible to the cmpxchg16b, to minimize the chance of concurrent
   ; interference.
+.again_all:
   mov rcx, null
   mov rbx, true
 .again:
-  mov rdx, arg4_r12
+  mov rdx, arg1_r8
   mov rax, false
   ; Get the queue's head at this moment.  It might change before we get to
   ; locking it, because of concurrent threads.
   mov arg2_r9, [rdx + queue.head]
   cmp arg2_r9, null
-  je .mmap_new_page
+  je .get_new_space
   ; Atomically check if concurrent interference happened, and, if not, lock the
   ; head node for our use.  If it's not locked and still q's head, we can use
   ; it.  If it's locked and q's head, another thread is using it in enqueue.  If
@@ -79,6 +84,7 @@ alloc_task:
   mov rsi, [arg2_r9 + queue_node.next]
   cmp rsi, null
   je .also_tail
+  mov qword [arg2_r9 + queue_node.next], null
   ; We can set this field without concern about new_head concurrently being
   ; accessed by other threads.  Concurrent dequeues cannot get to new_head yet.
   ; Concurrent enqueues have an item that cannot be new_head (users'
@@ -91,82 +97,149 @@ alloc_task:
   ; Set the queue's new head ASAP, so other threads can use it ASAP.
   mov [rdx + queue.head], rsi
 
-.done:
-  ; The .locked field of the dequeued node, old_head, remains true.
-  ; Enqueue relies on item nodes having the state dequeue returns them with.
-  mov qword [arg2_r9 + queue_node.tail_of], null
-  mov qword [arg2_r9 + queue_node.next], null
-  jmp ret_r13
-
-.mmap_new_page:
-  ; TODO: Dummy locked node exclusion technique.
-
-  ; Try to get a block of larger size, else allocate from OS.
-  ; Get a page from the OS, divide it into blocks of the requested size, link
-  ; them together, and enqueue all-at-once.
-
-  ; Save registers.
-  ;mov ?, arg2_r9   ; not needed
-  mov rbx, arg1_r8
-  ;mov ?, arg3_r10  ; not needed
-  ;mov ?, rdx       ; not needed if jmp to .again
-  ;mov ?, rsi       ; not needed
-  ;mov ?, rdi       ; not needed
-  ;mov ?, rax       ; not needed if jmp to .again
-
-  ; mmap a page.
-  mov r9, 0      ; pgoffset
-  mov r8, -1     ; fd
-  mov r10, 22h   ; flags = MAP_PRIVATE | MAP_ANONYMOUS
-  mov rdx, 3     ; prot = PROT_READ | PROT_WRITE
-  mov rsi, 4096  ; length
-  mov rdi, 0     ; addr = NULL
-  mov rax, 9     ; mmap syscall number
-  syscall
-  cmp rax, 0
-  jl mmap_failed
-  ; Else, pointer to new page is in rax.
-  ; Divide page into blocks of requested size.
-  ; Reserve first block for return value.
-  ; Link remaining blocks together.
-  ; Do special enqueue, into group's queue, which atomically enqueues
-  ; multi-block chain.
-  TODO
-  ; Return first block of new page.
-  mov arg2_r9, ???
-  mov qword [arg2_r9 + queue_node.locked], true
-  ; Other fields are null/false because mmap zeros.
+  ; The .locked field of the dequeued node, old_head, remains true, and all
+  ; other fields are null/false.  Enqueue relies on item nodes having the state
+  ; dequeue returns them with.
   jmp ret_r13
 
 .also_tail:
+  ; Since the node is locked, any other threads trying to access it as the tail
+  ; are excluded.
+  mov qword [arg2_r9 + queue_node.tail_of], null
   ; Remove head and tail, atomically.
-  mov rsi, rdx
   mov rdx, arg2_r9
   mov rax, arg2_r9
   ;mov rcx, null     ; already set
   mov rbx, null
   ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Here, cmpxchg16b is used only for 16-byte write atomicity, not for
+  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
-  lock cmpxchg16b [rsi + queue.head]
-  je .done
-  jmp bug  ; Head node is still locked, so unequal cmp not possible.
+  lock cmpxchg16b [arg1_r8 + queue.head]
+  jne bug  ; Head node is still locked, so unequal cmp not possible.
+  jmp ret_r13
 
+.get_new_space:
+  ; Get some more space from the OS, divide it into blocks of the requested
+  ; size, link them together, and enqueue all-at-once.
+
+%assign space_size task_size + 8 * task_max_args
+
+  ; Try to set the dummy locked node as head, to exclude other threads while we
+  ; work on adding a new space of blocks.
+  mov rdx, null
+  mov rax, null
+  mov rcx, dummy_locked
+  mov rbx, dummy_locked
+  lock cmpxchg16b [arg1_r8 + queue.head]  ; Also accesses .tail field.
+  jne .again_all  ; Another processor interfered concurrently.
+
+  ; Save registers.
+  ;mov ?, arg2_r9
+  mov rbx, arg1_r8
+  ;mov ?, arg3_r10
+  ;mov ?, rdx
+  ;mov ?, rsi
+  ;mov ?, rdi
+  ;mov ?, rax
+  ;mov ?, rcx  ; syscall destroys
+  ;mov ?, r11  ; syscall destroys
+
+  ; mmap a space.
+  mov r9, 0            ; pgoffset
+  mov r8, -1           ; fd
+  mov r10, 22h         ; flags = MAP_PRIVATE | MAP_ANONYMOUS
+  mov rdx, 3           ; prot = PROT_READ | PROT_WRITE
+  mov rsi, space_size  ; length
+  mov rdi, 0           ; addr = NULL
+  mov rax, 9           ; mmap syscall number, from disassembled glibc
+  syscall
+  ; This check for failure is taken from disassembled glibc.
+  cmp rax, -4095
+  jae .mmap_failed  ; Else, pointer to new space is in rax.
+  ; TODO: mmap syscall preserves all registers except rax, right?
+
+  ; Restore registers.
+  mov arg1_r8, rbx
+
+  ; Compute size of block, by reversing the computation of arg1_r8 and
+  ; multiplying by 8.
+  sub rbx, block_groups
+  shr rbx, 1  ; Divide by 2, same as dividing by 16 and multiplying by 8.
+  add rbx, task_size
+
+  ; Reserve first block for return value.
+  mov arg2_r9, rax
+  mov [rax + block.group], arg1_r8
+  mov qword [rax + queue_node.locked], true  ; Needed by enqueue.
+  ; Other fields are null/false because mmap zeros, as enqueue needs.
+
+  ; Compute last possible block.
+  add rsi, rax  ; End of the space.
+  sub rsi, rbx
+
+  ; Setup new head, maybe.
+  add rax, rbx  ; Head block, maybe.
+  cmp rax, rsi
+  ja .fits_only_one
+  mov [rax + queue_node.head_of], arg1_r8
+
+.divide_and_link:
+  ; Divide remaining space into blocks of requested size, and link together.
+  mov [rax + block.group], arg1_r8
+  lea rcx, [rax + rbx]  ; Next block, maybe.
+  cmp rcx, rsi
+  ja .enqueue_chain
+  mov [rax + queue_node.next], rcx
+  mov rax, rcx
+  jmp .divide_and_link
+
+.enqueue_chain:
+  mov [rax + queue_node.tail_of], arg1_r8
+  ; Set the queue to the chain of new blocks, atomically.
+  lea rcx, [arg2_r9 + rbx]  ; Head block
+  mov rbx, rax
+  mov rdx, dummy_locked
+  mov rax, dummy_locked
+  ; The queue's .tail field is also read and written by this 16-byte operation.
+  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
+  ; comparison.
+  lock cmpxchg16b [arg1_r8 + queue.head]
+  jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
+  jmp ret_r13  ; Return first block of new space.
+
+.fits_only_one:
+  ; Set queue to empty.
+  mov rdx, dummy_locked
+  mov rax, dummy_locked
+  mov rcx, null
+  mov rbx, null
+  ; The queue's .tail field is also read and written by this 16-byte operation.
+  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
+  ; comparison.
+  lock cmpxchg16b [arg1_r8 + queue.head]
+  jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
+  jmp ret_r13  ; Return first block of new space.
+
+.mmap_failed:
+  ; TODO: Negated error code is in rax, print to stderr, and do something...
+  hlt
 
 
 
 supply_retval:
   ; Return a value to a waiting task, argument in arg1_r8,
-  ; and continue into enqueue_task.
+  ; and maybe continue into enqueue_task.
 
+  ; No other threads will access our currently executing task, so we can access
+  ; it without concurrency concern.
   mov arg2_r9, [cet_r14 + task.rcvr]
   mov arg3_r10, [cet_r14 + task.ridx]
   ; No other threads will access this field in rcvr, so we can access it without
   ; concurrency concern.
-  mov [arg2_r9 + task.arg + 8 * arg3_r10], arg1_r8
+  mov [arg2_r9 + task.args + 8 * arg3_r10], arg1_r8
   ; Other threads will access the .need field, so we must atomically decrement
   ; it.
-  lock dec [arg2_r9 + task.need]
+  lock dec qword [arg2_r9 + task.need]
   jnz free_pet__exec_avail  ; rcvr needs more
   ; Supplied the final needed argument to rcvr, so enqueue rcvr for execution.
   mov ret_r13, free_pet__exec_avail  ; Make enqueue_task return to this.
@@ -197,11 +270,7 @@ enqueue_task:
   ; it.  If it's locked and q's tail, another thread is using it in dequeue.  If
   ; it's no longer q's tail, we cannot use it.  The .tail_of field is also read
   ; and written, because the operation works on 16 bytes, and .tail_of follows
-  ; .locked in memory.  The 16-byte operation is used to test both fields,
-  ; instead of testing only .locked, because I think doing so reduces the chance
-  ; of concurrent contention that would be more likely if the node was locked
-  ; before checking if it's still q's tail.  We avoiding locking it if we don't
-  ; need to.
+  ; .locked in memory.
   lock cmpxchg16b [arg3_r10 + queue_node.locked]
   jne .again  ; Another processor interfered concurrently.
 
@@ -243,8 +312,8 @@ enqueue_task:
 
 
 
-; This part of free_pet__exec_avail must be here so free_pet__exec_avail can
-; continue into exec_avail.
+; This part of free_pet__exec_avail is here so free_pet__exec_avail can continue
+; into exec_avail.
 free_pet__exec_avail.empty:
   ; Insert as head and tail, atomically.
   ;mov rdx, null  ; already set (as false)
@@ -254,7 +323,7 @@ free_pet__exec_avail.empty:
   ; The queue's .tail field is also read and written by this 16-byte operation.
   ; Like below, the item node must be locked.
   lock cmpxchg16b [rsi + queue.head]
-  jne free_pet__exec_avail.again_from_empty  ; Another processor interfered concurrently.
+  jne free_pet__exec_avail.again_all  ; Another processor interfered concurrently.
   mov [cet_r14 + queue_node.head_of], rsi
   jmp free_pet__exec_avail.done
 
@@ -265,11 +334,13 @@ free_pet__exec_avail:
   ; Free the previously executing task by adding it to its block group queue,
   ; and continue into exec_avail.
 
-  mov rsi, [cet_r15 + block.group]
+  ; No other threads will access our currently executing task, so we can access
+  ; it without concurrency concern.
+  mov rsi, [cet_r14 + block.group]
   ; Setup for the cmpxchg16b here, so the load of the queue's tail is as close
   ; as possible to the cmpxchg16b, to minimize the chance of concurrent
   ; interference.
-.again_from_empty:
+.again_all:
   mov rcx, true
   mov rbx, null
 .again:
@@ -285,11 +356,7 @@ free_pet__exec_avail:
   ; it.  If it's locked and q's tail, another thread is using it in dequeue.  If
   ; it's no longer q's tail, we cannot use it.  The .tail_of field is also read
   ; and written, because the operation works on 16 bytes, and .tail_of follows
-  ; .locked in memory.  The 16-byte operation is used to test both fields,
-  ; instead of testing only .locked, because I think doing so reduces the chance
-  ; of concurrent contention that would be more likely if the node was locked
-  ; before checking if it's still q's tail.  We avoiding locking it if we don't
-  ; need to.
+  ; .locked in memory.
   lock cmpxchg16b [rdi + queue_node.locked]
   jne .again  ; Another processor interfered concurrently.
 
@@ -352,6 +419,7 @@ exec_avail:
   mov rsi, [cet_r14 + queue_node.next]
   cmp rsi, null
   je .also_tail
+  mov qword [cet_r14 + queue_node.next], null
   ; We can set this field without concern about new_head concurrently being
   ; accessed by other threads.  Concurrent dequeues cannot get to new_head yet.
   ; Concurrent enqueues have an item that cannot be new_head (users'
@@ -364,21 +432,23 @@ exec_avail:
   ; Set the queue's new head ASAP, so other threads can use it ASAP.
   mov [rdx + queue.head], rsi
 
-.done:
-  ; The .locked field of the dequeued node, old_head, remains true.
-  ; Enqueue relies on item nodes having the state dequeue returns them with.
-  mov qword [cet_r14 + queue_node.tail_of], null
-  mov qword [cet_r14 + queue_node.next], null
+  ; The .locked field of the dequeued node, old_head, remains true, and all
+  ; other fields are null/false.  Enqueue relies on item nodes having the state
+  ; dequeue returns them with.
+
   ; Execute the task's instructions.  Tasks are responsibile for jumping back to
-  ; free_pet__exec_avail or exec_avail.
+  ; free_pet__exec_avail.
   jmp [cet_r14 + task.exec]
 
 .try_another:
   ; Try to take a task from another thread.
-  mov rdx, [rdx + queue.next]
+  mov rdx, [rdx + queue_linked.next]
   jmp .get_head
 
 .also_tail:
+  ; Since the node is locked, any other threads trying to access it as the tail
+  ; are excluded.
+  mov qword [cet_r14 + queue_node.tail_of], null
   ; Remove head and tail, atomically.
   mov rsi, rdx
   mov rdx, cet_r14
@@ -386,64 +456,135 @@ exec_avail:
   ;mov rcx, null     ; already set
   mov rbx, null
   ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Here, cmpxchg16b is used only for 16-byte write atomicity, not for
+  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
   lock cmpxchg16b [rsi + queue.head]
-  je .done
-  jmp bug  ; Head node is still locked, so unequal cmp not possible.
+  jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
+  ; Execute the task.
+  jmp [cet_r14 + task.exec]
 
 
 
 
+section .data  align=8
+
+; The queue strucs for all the block groups must be contiguously located,
+; because they are accessed as an array.
+
+block_groups:
+
+; The amount of groups for task argument sizes that are pre-initialized, so
+; programs don't immediately have to mmap them at start-up.  This is chosen to
+; accommodate the common sizes of arguments.
+%assign static_alloc_group_amount 7  ; For argument sizes 0 through 6.
+
+; Pre-initialized groups.
+%assign sag 0
+%rep static_alloc_group_amount
+block_group_%[sag]:
+  istruc queue
+    at queue.head, dq group_%[sag]_head
+    at queue.tail, dq group_%[sag]_tail
+  iend
+  %assign sag sag + 1
+%endrep
+
+; Non-initialized groups.  Attempts to alloc_task of these sizes will always
+; cause mmap for needed space.
+%rep task_max_args + 1 - static_alloc_group_amount
+  istruc queue
+    at queue.head, dq null
+    at queue.tail, dq null
+  iend
+%endrep
 
 
+; Pre-allocated and pre-initialized task queues for the pre-initialized block
+; groups.
 
+; The amount of pre-allocated task strucs in each pre-initialized group.
+; Different programs will need different amounts depending on the program, and
+; so possibly have to mmap, but we can provide enough here for many common
+; programs.
+%assign static_alloc_queue_size 32  ; Good amount?
 
-; Brainstorm -- What could a parallel evaluation of procedure arguments compile to?
-; Expression: ((a) (task-arg1 (b 1)))
+%assign sag 0
+%rep static_alloc_group_amount
+; Head node
+group_%[sag]_head:
+  istruc task
+    at task.block, \
+      istruc block
+        at block.queue_node, \
+          istruc queue_node
+            at queue_node.head_of, dq block_group_%[sag]
+            at queue_node.locked,  dq false
+            at queue_node.tail_of, dq null
+            at queue_node.next,    dq group_%[sag]_1
+          iend
+        at block.group, dq block_group_%[sag]
+      iend
+    at task.rcvr, dq null
+    at task.ridx, dq null
+    at task.need, dq null
+    at task.args, dq null
+  iend
+  times sag dq null  ; Arguments fields.
 
-  mov arg1_r8, 1
-  jmp_ret alloc_task
-  mov [arg2_r9 + task.need], 2
-  mov [arg2_r9 + task.rcvr], whatever
-  mov [arg2_r9 + task.ridx], whatever
-  mov t1, arg2_r9
+; Inner nodes
+group_%[sag]_1:
+  %assign inner 2
+  %rep static_alloc_queue_size - 2
+    istruc task
+      at task.block, \
+        istruc block
+          at block.queue_node, \
+            istruc queue_node
+              at queue_node.head_of, dq null
+              at queue_node.locked,  dq false
+              at queue_node.tail_of, dq null
+              at queue_node.next,    dq group_%[sag]_%[inner]
+            iend
+          at block.group, dq block_group_%[sag]
+        iend
+      at task.rcvr, dq null
+      at task.ridx, dq null
+      at task.need, dq null
+      at task.args, dq null
+    iend
+    times sag dq null  ; Arguments fields.
+group_%[sag]_%[inner]:
+    %assign inner inner + 1
+  %endrep
 
-  mov arg1_r8, 0
-  jmp_ret alloc_task
-  mov [arg2_r9 + task.exec], a
-  ;mov [arg2_r9 + task.need], 0  ; Not needed because task gets enqueued already.
-  mov [arg2_r9 + task.rcvr], t1
-  mov [arg2_r9 + task.ridx], 0   ; ridx 0 is rcvr's exec field
-  jmp_ret enqueue_task  ; arg2_r9 already set
+; Tail node
+group_%[sag]_tail:
+  istruc task
+    at task.block, \
+      istruc block
+        at block.queue_node, \
+          istruc queue_node
+            at queue_node.head_of, dq null
+            at queue_node.locked,  dq false
+            at queue_node.tail_of, dq block_group_%[sag]
+            at queue_node.next,    dq null
+          iend
+        at block.group, dq block_group_%[sag]
+      iend
+    at task.rcvr, dq null
+    at task.ridx, dq null
+    at task.need, dq null
+    at task.args, dq null
+  iend
+  times sag dq null  ; Arguments fields.
 
-  mov arg1_r8, 1
-  jmp_ret alloc_task
-  mov t2, [cet_r14 + task.arg1]
-  mov [arg2_r9 + task.exec], t2
-  mov [arg2_r9 + task.need], 1
-  mov [arg2_r9 + task.rcvr], t1
-  mov [arg2_r9 + task.ridx], 1  ; ridx 1 is rcvr's arg1 field
-  mov t2, arg2_r9
+  %assign sag sag + 1
+%endrep
 
-  mov arg1_r8, 1
-  jmp_ret alloc_task
-  mov [arg2_r9 + task.exec], b
-  ;mov [arg2_r9 + task.need], 0
-  mov [arg2_r9 + task.rcvr], t2
-  mov [arg2_r9 + task.ridx], 1
-  mov [arg2_r9 + task.arg1], 1
-
-  mov ret_r13, free_pet__exec_avail  ; Make enqueue_task return to this.
-  jmp enqueue_task  ; arg2_r9 already set
-
-
-
-
-; Brainstorm -- What could returning a value to a waiting task, and checking if
-; the waiting task is ready to be queued, and deallocating the currently
-; executing task, compile to?  E.g. the b call above.  (define (b n) (+ 7 n))
-b:
-  mov arg1_r8, [cet_r14 + task.arg1]
-  add arg1_r8, 7
-  jmp supply_retval
+dummy_locked:
+  istruc queue_node
+    at queue_node.head_of, dq null
+    at queue_node.locked,  dq true
+    at queue_node.tail_of, dq null
+    at queue_node.next,    dq null
+  iend

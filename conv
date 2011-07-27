@@ -1,3 +1,9 @@
+;--- User may modify these. ----------------------------------------------------
+
+%assign task_max_args 503
+
+;--- Internal. Do not modify. --------------------------------------------------
+
 %define true  1
 %define false 0
 %define null  0
@@ -16,43 +22,46 @@
 %define ret_r13   r13
 
 
-%macro jmp_ret %1
+%macro jmp_ret 1
   mov ret_r13, %%continuation
   jmp %1
   %%continuation:
-%encmacro
+%endmacro
 
+
+; Instances of all the below struc types must be aligned at 8-byte boundary, so
+; that loads and stores are atomic.  Those statically allocated in the .data
+; section are properly aligned, because the section is specified to be aligned
+; at 8-byte and because all the strucs have qword fields which preserves the
+; correct alignment when the strucs are packed contiguously next to each other.
+; Those dynamically allocated by mmap are properly aligned, because mmap
+; allocates pages on page boundary.
 
 struc task
   .block:  resb block_size
   .rcvr:   resq 1
   .ridx:   resq 1
   .need:   resq 1
-  .arg:
-  .exec:   resq 1
+  .args:   resq 1
   ; From here, tasks have varying lengths.
 endstruc
 
-%assign task.arg1 task.arg + 8
-%assign task.arg2 task.arg + 16
-%assign task.arg3 task.arg + 24
+%assign task.exec task.args
+; These are only for convenience - a task might have more.
+%assign task.arg1 task.args + 8
+%assign task.arg2 task.args + 8 * 2
+%assign task.arg3 task.args + 8 * 3
+%assign task.arg4 task.args + 8 * 4
+%assign task.arg5 task.args + 8 * 5
+%assign task.arg6 task.args + 8 * 6
 
 struc block
   .queue_node:  resb queue_node_size
   .group:       resq 1
 endstruc
 
-; The order of the queue strucs' fields is required for the cmpxchg16b
+; The order of queue and queue_node fields is required for the cmpxchg16b
 ; techniques.
-
-; TODO: Instances of the queue strucs must be aligned at 8-byte, so that loads
-; and stores are atomic.
-
-struc queue
-  .head: resq 1
-  .tail: resq 1
-  .next: resq 1
-endstruc
 
 struc queue_node
   .head_of: resq 1
@@ -60,3 +69,22 @@ struc queue_node
   .tail_of: resq 1
   .next:    resq 1
 endstruc
+
+struc queue
+  .head: resq 1
+  .tail: resq 1
+endstruc
+
+struc queue_linked
+  .queue: resb queue_size
+  .next:  resq 1
+endstruc
+
+
+
+
+%assign page_size 4096
+
+%if (task_size + 8 * task_max_args) % page_size != 0
+  %warning "Weird task_max_args: " task_max_args
+%endif

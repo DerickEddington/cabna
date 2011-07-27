@@ -1,7 +1,17 @@
-All instructions which set a register to 0 should use xor instead.
+Intel manual says cmpxchg16b memory operand must be 16-byte aligned.  This means that the 
+technique for the three queue_node fields won't work because they can't both be 16-byte 
+aligned!  So, another technique must be used, such as cmpxchg of only the .locked field 
+and then checking the .head_of or .tail_of field.
 
-Investigate opportunities to optimize assembly source for speed and size, such
-as "mov byte" instead of "mov qword".
+Intel manual says lock variables should be one per 128-byte block (cache line)
+and the blocks must be 128-byte aligned.  This also applies to task.need, which
+will work-out because it'll be in a 128-byte task.
+
+Use branch hint instruction prefixes.
+
+Use pause instruction in spin-wait loops.
+
+Do some testing with only one thread, before implementing multiple threads.
 
 Implement thread creation per number of processors, at program start-up.  This
 will allow exploring parallelism, even though the thread creation design might
@@ -11,3 +21,20 @@ Make a simple Scheme-like interpreter written in assembly and using the task
 queueing and execution facilities.  I think this is an easy step towards using
 the parallel processing without having a compiler.  Useful parallel programs
 (including a compiler) can be interpreted.
+
+All instructions which set a register to 0 should use xor instead.
+
+Investigate opportunities to optimize assembly source for speed and size, such
+as "mov byte" instead of "mov qword".
+
+Investigate changing alloc_task to take its argument as the pointer to the
+desired block group.  I think this can be computed at compile/link-time instead
+of at runtime everytime alloc_task is called.  Maybe this could be done by
+exporting block_groups and by making an alloc_task macro that does the
+computation.
+
+Investigate whether using rsi as a temp is the best idea or not.  Why destroy it
+if not necessary if arg3 or arg4 can be used instead?  Is using an rX register
+slower than legacy registers?
+
+Investigate what NASM directives are neccessary to make a shared library.
