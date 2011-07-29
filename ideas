@@ -1,14 +1,14 @@
 ; Brainstorm -- What could a parallel evaluation of procedure arguments compile to?
 ; Expression: ((a) (task-arg1 (b 1)))
 
-  mov arg1_r8, 1
   jmp_ret alloc_task
   mov [arg2_r9 + task.need], 2
-  mov [arg2_r9 + task.rcvr], whatever
-  mov [arg2_r9 + task.ridx], whatever
+  mov t1, [cet_r14 + task.rcvr]
+  mov [arg2_r9 + task.rcvr], t1
+  mov t1, [cet_r14 + task.ridx]
+  mov [arg2_r9 + task.ridx], t1
   mov t1, arg2_r9
 
-  mov arg1_r8, 0
   jmp_ret alloc_task
   mov [arg2_r9 + task.exec], a
   ;mov [arg2_r9 + task.need], 0  ; Not needed because task gets enqueued already.
@@ -16,7 +16,6 @@
   mov [arg2_r9 + task.ridx], 0   ; ridx 0 is rcvr's exec field
   jmp_ret enqueue_task  ; arg2_r9 already set
 
-  mov arg1_r8, 1
   jmp_ret alloc_task
   mov t2, [cet_r14 + task.arg1]
   mov [arg2_r9 + task.exec], t2
@@ -25,7 +24,6 @@
   mov [arg2_r9 + task.ridx], 1  ; ridx 1 is rcvr's arg1 field
   mov t2, arg2_r9
 
-  mov arg1_r8, 1
   jmp_ret alloc_task
   mov [arg2_r9 + task.exec], b
   ;mov [arg2_r9 + task.need], 0

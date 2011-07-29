@@ -1,24 +1,30 @@
 ;--- User may modify these. ----------------------------------------------------
 
-%assign task_max_args 503
+%assign amount_threads 1
+
+; The amount of pre-allocated free task strucs.  Different programs will need
+; different amounts depending on the program, and so possibly have to mmap, but
+; we can provide enough here for many common programs.
+%assign statically_allocated_free_tasks 64
+
+; The amount of task strucs to allocate per mmap when more are needed.
+%assign mmap_tasks 64
+
 
 ;--- Internal. Do not modify. --------------------------------------------------
 
-%define true  1
-%define false 0
-%define null  0
 
-; These registers are reserved for the runtime and must not be mutated by users.
+; These registers are reserved for the runtime system and must not be mutated by
+; users.
 %define ttq_r15 r15  ; A thread's task queue.
 %define cet_r14 r14  ; A thread's currently executing task.
+
 
 ; Procedure call arguments, including return-instruction (continuation) as last
 ; argument.  These can also used as local variables.
 %define arg1_r8   r8
 %define arg2_r9   r9
 %define arg3_r10  r10
-; r11 isn't used because of its implicit use with syscall/sysret.
-%define arg4_r12  r12
 %define ret_r13   r13
 
 
@@ -30,61 +36,59 @@
 
 
 ; Instances of all the below struc types must be aligned at 8-byte boundary, so
-; that loads and stores are atomic.  Those statically allocated in the .data
-; section are properly aligned, because the section is specified to be aligned
-; at 8-byte and because all the strucs have qword fields which preserves the
-; correct alignment when the strucs are packed contiguously next to each other.
-; Those dynamically allocated by mmap are properly aligned, because mmap
-; allocates pages on page boundary.
+; that loads and stores of the fields are atomic.  Instances of task and queue
+; strucs must be aligned at 128-byte boundary, for processor bus locking
+; efficiency.  Instances of queue strucs must be aligned at 16-byte boundary,
+; for cmpxchg16b.  Those statically allocated in the .data section are properly
+; aligned, because the section is specified to be aligned at 128-byte and the
+; strucs are specified to be aligned at 128-byte.  Because all the strucs have
+; qword fields, this preserves the correct 8-byte alignment.  Because task
+; strucs are 128 bytes long, this preserves the correct 128-byte alignment when
+; they are located contiguously.  Task strucs dynamically allocated by mmap are
+; properly aligned, because mmap allocates pages on page boundary.
 
 struc task
-  .block:  resb block_size
-  .rcvr:   resq 1
-  .ridx:   resq 1
-  .need:   resq 1
-  .args:   resq 1
-  ; From here, tasks have varying lengths.
-endstruc
-
-%assign task.exec task.args
-; These are only for convenience - a task might have more.
-%assign task.arg1 task.args + 8
-%assign task.arg2 task.args + 8 * 2
-%assign task.arg3 task.args + 8 * 3
-%assign task.arg4 task.args + 8 * 4
-%assign task.arg5 task.args + 8 * 5
-%assign task.arg6 task.args + 8 * 6
-
-struc block
-  .queue_node:  resb queue_node_size
-  .group:       resq 1
-endstruc
-
-; The order of queue and queue_node fields is required for the cmpxchg16b
-; techniques.
-
-struc queue_node
+  .next:    resq 1  ; Lowest bit is lock field.
   .head_of: resq 1
-  .locked:  resq 1
   .tail_of: resq 1
-  .next:    resq 1
+  .rcvr:    resq 1
+  .ridx:    resq 1
+  .need:    resq 1
+  .exec:    resq 1
+  .arg1:    resq 1
+  .arg2:    resq 1
+  .arg3:    resq 1
+  .arg4:    resq 1
+  .arg5:    resq 1
+  .arg6:    resq 1
+  .arg7:    resq 1
+  .arg8:    resq 1
+  .arg9:    resq 1
 endstruc
+
+%assign task.args task.exec
+
+%if task_size != 128
+  %warning "Task size " task_size " not 128."
+%endif
+
+
+; The order of queue .head and .tail fields is required for the cmpxchg16b
+; technique.
 
 struc queue
   .head: resq 1
   .tail: resq 1
-endstruc
-
-struc queue_linked
-  .queue: resb queue_size
-  .next:  resq 1
+  .next: resq 1
 endstruc
 
 
 
 
-%assign page_size 4096
+%if statically_allocated_free_tasks < 2
+  %warning "statically_allocated_free_tasks less than 2."
+%endif
 
-%if (task_size + 8 * task_max_args) % page_size != 0
-  %warning "Weird task_max_args: " task_max_args
+%if (mmap_tasks * task_size) % 4096 != 0
+  %warning "mmap_tasks " mmap_tasks " size not a multiple of page size."
 %endif
