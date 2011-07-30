@@ -85,7 +85,7 @@ alloc_task:
   ; null.  Enqueue relies on item nodes having the state dequeue returns them
   ; with.
   mov qword [arg2_r9 + task.next], 1  ; 1 is null with locked bit set.
-  jmp/ind ret_r13
+  jmp_ind ret_r13
 
 .also_tail:
   ; Since the node is locked, any other threads trying to access it as the tail
@@ -101,7 +101,7 @@ alloc_task:
   ; comparison.
   lock cmpxchg16b [free_tasks + queue.head]
   jne bug  ; Head node is still locked, so unequal cmp not possible.
-  jmp/ind ret_r13
+  jmp_ind ret_r13
 
 .not_head:
   ; Unlock the node which is no longer the head.
@@ -179,7 +179,7 @@ alloc_task:
   ; comparison.
   lock cmpxchg16b [arg1_r8 + queue.head]
   jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
-  jmp/ind ret_r13  ; Return first block of new space.
+  jmp_ind ret_r13  ; Return first block of new space.
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
@@ -250,7 +250,7 @@ enqueue_task:
 .done:
   mov [arg2_r9 + task.tail_of], ttq_r15
   btr qword [arg2_r9 + task.next], 0  ; Unlock the new tail.
-  jmp/ind ret_r13
+  jmp_ind ret_r13
 
 .empty:
   ; Insert as head and tail, atomically.
@@ -394,7 +394,7 @@ exec_avail:
   mov qword [cet_r14 + task.next], 1  ; 1 is null with locked bit set.
   ; Execute the task's instructions.  Tasks are responsibile for jumping back to
   ; free_pet__exec_avail.
-  jmp/ind [cet_r14 + task.exec]
+  jmp_ind [cet_r14 + task.exec]
 
 .try_another:
   ; Try to take a task from another thread.
@@ -417,7 +417,7 @@ exec_avail:
   lock cmpxchg16b [rsi + queue.head]
   jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
   ; Execute the task.
-  jmp/ind [cet_r14 + task.exec]
+  jmp_ind [cet_r14 + task.exec]
 
 .not_head:
   ; Unlock the node which is no longer the head.

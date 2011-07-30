@@ -36,7 +36,7 @@
 
 
 ; Indirect jump, more efficiently.
-%macro jmp/ind 1+
+%macro jmp_ind 1+
   jmp %1
   ud2  ; help branch misprediction
 %endmacro
