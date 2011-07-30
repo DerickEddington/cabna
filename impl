@@ -2,16 +2,18 @@ bits 64
 default rel
 
 
+global _start
 global free_pet__exec_avail
 global exec_avail
 global enqueue_task
 global alloc_task
 global supply_retval
 
+extern main
 extern bug
 
 
-%include "conv"
+%include "cabna/conv"
 
 
 
@@ -27,6 +29,14 @@ section .text
 ; This implementation assumes that users obey these responsibilities.
 
 
+_start:
+  ; TODO: This will need to change for multiple threads.
+  mov ttq_r15, thread0_tasks
+  jmp main
+
+
+
+
 alloc_task:
   ; Get a free task struc, from the queue of free ones, or allocate more memory
   ; from the OS for it, and return to ret_r13 with task pointer in arg2_r9.
@@ -37,7 +47,7 @@ alloc_task:
   cmp arg2_r9, 0
   je .get_new_space
   ; Try to lock the head node for our use.
-  lock bts dword [arg2_r9 + task.next], 1
+  lock bts dword [arg2_r9 + task.next], 0
   jc alloc_task  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -95,7 +105,7 @@ alloc_task:
 
 .not_head:
   ; Unlock the node which is no longer the head.
-  btr dword [arg2_r9 + task.next], 1  ; Clear locked bit and preserve other bits.
+  btr dword [arg2_r9 + task.next], 0  ; Clear locked bit and preserve other bits.
   jmp alloc_task
 
 .get_new_space:
@@ -209,7 +219,7 @@ enqueue_task:
   cmp arg3_r10, 0
   je .empty
   ; Try to lock the tail node for our use.
-  lock bts dword [arg3_r10 + task.next], 1
+  lock bts dword [arg3_r10 + task.next], 0
   jc enqueue_task  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -239,7 +249,7 @@ enqueue_task:
 
 .done:
   mov [arg2_r9 + task.tail_of], ttq_r15
-  btr dword [arg2_r9 + task.next], 1  ; Unlock the new tail.
+  btr dword [arg2_r9 + task.next], 0  ; Unlock the new tail.
   jmp ret_r13
 
 .empty:
@@ -257,7 +267,7 @@ enqueue_task:
 
 .not_tail:
   ; Unlock the node which is no longer the tail.
-  btr dword [arg3_r10 + task.next], 1  ; Clear locked bit and preserve other bits.
+  btr dword [arg3_r10 + task.next], 0  ; Clear locked bit and preserve other bits.
   jmp enqueue_task
 
 
@@ -280,7 +290,7 @@ free_pet__exec_avail.empty:
 
 free_pet__exec_avail.not_tail:
   ; Unlock the node which is no longer the tail.
-  btr dword [rdi + task.next], 1  ; Clear locked bit and preserve other bits.
+  btr dword [rdi + task.next], 0  ; Clear locked bit and preserve other bits.
   ;jmp free_pet__exec_avail  ; We can continue into it.
 
 
@@ -296,7 +306,7 @@ free_pet__exec_avail:
   cmp rdi, 0
   je .empty
   ; Try to lock the tail node for our use.
-  lock bts dword [rdi + task.next], 1
+  lock bts dword [rdi + task.next], 0
   jc free_pet__exec_avail  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -325,8 +335,8 @@ free_pet__exec_avail:
   mov [free_tasks + queue.tail], cet_r14
 
 .done:
-  mov [cet_r14 + task.tail_of], rsi
-  btr dword [cet_r14 + queue.next], 1  ; Unlock new tail.
+  mov qword [cet_r14 + task.tail_of], free_tasks
+  btr dword [cet_r14 + task.next], 0  ; Unlock new tail.
   ; Continue into exec_avail.
 
 
@@ -344,7 +354,7 @@ exec_avail:
   cmp cet_r14, 0
   je .try_another
   ; Try to lock the head node for our use.
-  lock bts dword [cet_r14 + task.next], 1
+  lock bts dword [cet_r14 + task.next], 0
   jc exec_avail  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -411,7 +421,7 @@ exec_avail:
 
 .not_head:
   ; Unlock the node which is no longer the head.
-  btr dword [cet_r14 + task.next], 1  ; Clear locked bit and preserve other bits.
+  btr dword [cet_r14 + task.next], 0  ; Clear locked bit and preserve other bits.
   jmp exec_avail
 
 
