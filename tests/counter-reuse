@@ -33,7 +33,7 @@ done:  ; Exit program.
 ; (define (a n) (b (- n 1)))
 a:
   mov arg2_r9, cet_r14
-  dec qword [arg2_r9 + task.arg1]
+  sub qword [arg2_r9 + task.arg1], 1
   mov qword [arg2_r9 + task.exec], b
   mov ret_r13, exec_avail  ; Make enqueue_task return to this.
   jmp enqueue_task  ; arg2_r9 already set

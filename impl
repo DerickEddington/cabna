@@ -44,10 +44,10 @@ alloc_task:
   ; Get the queue's head at this moment.  It might change before we get to
   ; locking it, because of concurrent threads.
   mov arg2_r9, [free_tasks + queue.head]
-  cmp arg2_r9, 0
-  je .get_new_space
+  test arg2_r9, arg2_r9
+  jz .get_new_space
   ; Try to lock the head node for our use.
-  lock bts dword [arg2_r9 + task.next], 0
+  lock bts qword [arg2_r9 + task.next], 0
   jc alloc_task  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -57,7 +57,7 @@ alloc_task:
   ; Check if concurrent interference happened.  If it's still the head, we can
   ; use it.  If it's no longer the head, we cannot use it.
   mov rax, free_tasks
-  mov rbx, 0
+  xor rbx, rbx
   cmpxchg [arg2_r9 + task.head_of], rbx
   jne .not_head  ; Another thread interfered.
 
@@ -85,7 +85,7 @@ alloc_task:
   ; null.  Enqueue relies on item nodes having the state dequeue returns them
   ; with.
   mov qword [arg2_r9 + task.next], 1  ; 1 is null with locked bit set.
-  jmp ret_r13
+  jmp/ind ret_r13
 
 .also_tail:
   ; Since the node is locked, any other threads trying to access it as the tail
@@ -94,18 +94,18 @@ alloc_task:
   ; Remove head and tail, atomically.
   mov rdx, arg2_r9
   mov rax, arg2_r9
-  mov rcx, 0
-  ;mov rbx, 0     ; already set
+  xor rcx, rcx
+  ;xor rbx, rbx     ; already set
   ; The queue's .tail field is also read and written by this 16-byte operation.
   ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
   lock cmpxchg16b [free_tasks + queue.head]
   jne bug  ; Head node is still locked, so unequal cmp not possible.
-  jmp ret_r13
+  jmp/ind ret_r13
 
 .not_head:
   ; Unlock the node which is no longer the head.
-  btr dword [arg2_r9 + task.next], 0  ; Clear locked bit and preserve other bits.
+  btr qword [arg2_r9 + task.next], 0  ; Clear locked bit and preserve other bits.
   jmp alloc_task
 
 .get_new_space:
@@ -114,8 +114,8 @@ alloc_task:
 
   ; Try to set the dummy locked node as head, to exclude other threads while we
   ; work on adding the new space.
-  mov rdx, 0
-  mov rax, 0
+  xor rdx, rdx
+  xor rax, rax
   mov rcx, dummy_locked
   mov rbx, dummy_locked
   lock cmpxchg16b [free_tasks + queue.head]  ; Also accesses .tail field.
@@ -133,12 +133,12 @@ alloc_task:
   ;mov ?, r11  ; syscall destroys
 
   ; mmap a space.
-  mov r9, 0                        ; pgoffset
+  xor r9, r9                        ; pgoffset
   mov r8, -1                       ; fd
   mov r10, 22h                     ; flags = MAP_PRIVATE | MAP_ANONYMOUS
   mov rdx, 3                       ; prot = PROT_READ | PROT_WRITE
   mov rsi, mmap_tasks * task_size  ; length
-  mov rdi, 0                       ; addr = NULL
+  xor rdi, rdi                       ; addr = NULL
   mov rax, 9                       ; mmap syscall number, from disassembled glibc
   syscall
   ; This check for failure is taken from disassembled glibc.
@@ -179,7 +179,7 @@ alloc_task:
   ; comparison.
   lock cmpxchg16b [arg1_r8 + queue.head]
   jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
-  jmp ret_r13  ; Return first block of new space.
+  jmp/ind ret_r13  ; Return first block of new space.
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
@@ -200,7 +200,7 @@ supply_retval:
   mov [arg2_r9 + task.args + 8 * arg3_r10], arg1_r8
   ; Other threads will access the .need field, so we must atomically decrement
   ; it.
-  lock dec qword [arg2_r9 + task.need]
+  lock sub qword [arg2_r9 + task.need], 1
   jnz free_pet__exec_avail  ; rcvr needs more
   ; Supplied the final needed argument to rcvr, so enqueue rcvr for execution.
   mov ret_r13, free_pet__exec_avail  ; Make enqueue_task return to this.
@@ -216,10 +216,10 @@ enqueue_task:
   ; Get the queue's tail at this moment.  It might change before we get to
   ; locking it, because of concurrent threads.
   mov arg3_r10, [ttq_r15 + queue.tail]
-  cmp arg3_r10, 0
-  je .empty
+  test arg3_r10, arg3_r10
+  jz .empty
   ; Try to lock the tail node for our use.
-  lock bts dword [arg3_r10 + task.next], 0
+  lock bts qword [arg3_r10 + task.next], 0
   jc enqueue_task  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -229,7 +229,7 @@ enqueue_task:
   ; Check if concurrent interference happened.  If it's still the tail, we can
   ; use it.  If it's no longer the tail, we cannot use it.
   mov rax, ttq_r15
-  mov rbx, 0
+  xor rbx, rbx
   cmpxchg [arg3_r10 + task.tail_of], rbx
   jne .not_tail  ; Another thread interfered.
 
@@ -249,13 +249,13 @@ enqueue_task:
 
 .done:
   mov [arg2_r9 + task.tail_of], ttq_r15
-  btr dword [arg2_r9 + task.next], 0  ; Unlock the new tail.
-  jmp ret_r13
+  btr qword [arg2_r9 + task.next], 0  ; Unlock the new tail.
+  jmp/ind ret_r13
 
 .empty:
   ; Insert as head and tail, atomically.
-  mov rdx, 0
-  mov rax, 0
+  xor rdx, rdx
+  xor rax, rax
   mov rcx, arg2_r9
   mov rbx, arg2_r9
   ; The queue's .tail field is also read and written by this 16-byte operation.
@@ -267,7 +267,7 @@ enqueue_task:
 
 .not_tail:
   ; Unlock the node which is no longer the tail.
-  btr dword [arg3_r10 + task.next], 0  ; Clear locked bit and preserve other bits.
+  btr qword [arg3_r10 + task.next], 0  ; Clear locked bit and preserve other bits.
   jmp enqueue_task
 
 
@@ -277,8 +277,8 @@ enqueue_task:
 ; continue into exec_avail.
 free_pet__exec_avail.empty:
   ; Insert as head and tail, atomically.
-  mov rdx, 0
-  mov rax, 0
+  xor rdx, rdx
+  xor rax, rax
   mov rcx, cet_r14
   mov rbx, cet_r14
   ; The queue's .tail field is also read and written by this 16-byte operation.
@@ -290,7 +290,7 @@ free_pet__exec_avail.empty:
 
 free_pet__exec_avail.not_tail:
   ; Unlock the node which is no longer the tail.
-  btr dword [rdi + task.next], 0  ; Clear locked bit and preserve other bits.
+  btr qword [rdi + task.next], 0  ; Clear locked bit and preserve other bits.
   ;jmp free_pet__exec_avail  ; We can continue into it.
 
 
@@ -303,10 +303,10 @@ free_pet__exec_avail:
   ; Get the queue's tail at this moment.  It might change before we get to
   ; locking it, because of concurrent threads.
   mov rdi, [free_tasks + queue.tail]
-  cmp rdi, 0
-  je .empty
+  test rdi, rdi
+  jz .empty
   ; Try to lock the tail node for our use.
-  lock bts dword [rdi + task.next], 0
+  lock bts qword [rdi + task.next], 0
   jc free_pet__exec_avail  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -316,7 +316,7 @@ free_pet__exec_avail:
   ; Check if concurrent interference happened.  If it's still the tail, we can
   ; use it.  If it's no longer the tail, we cannot use it.
   mov rax, free_tasks
-  mov rbx, 0
+  xor rbx, rbx
   cmpxchg [rdi + task.tail_of], rbx
   jne .not_tail  ; Another thread interfered.
 
@@ -336,7 +336,7 @@ free_pet__exec_avail:
 
 .done:
   mov qword [cet_r14 + task.tail_of], free_tasks
-  btr dword [cet_r14 + task.next], 0  ; Unlock new tail.
+  btr qword [cet_r14 + task.next], 0  ; Unlock new tail.
   ; Continue into exec_avail.
 
 
@@ -351,10 +351,10 @@ exec_avail:
   ; Get the queue's head at this moment.  It might change before we get to
   ; locking it, because of concurrent threads.
   mov cet_r14, [rdx + queue.head]
-  cmp cet_r14, 0
-  je .try_another
+  test cet_r14, cet_r14
+  jz .try_another
   ; Try to lock the head node for our use.
-  lock bts dword [cet_r14 + task.next], 0
+  lock bts qword [cet_r14 + task.next], 0
   jc exec_avail  ; Another thread already has it locked.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
@@ -364,7 +364,7 @@ exec_avail:
   ; Check if concurrent interference happened.  If it's still the head, we can
   ; use it.  If it's no longer the head, we cannot use it.
   mov rax, rdx
-  mov rbx, 0
+  xor rbx, rbx
   cmpxchg [cet_r14 + task.head_of], rbx
   jne .not_head  ; Another thread interfered.
 
@@ -394,7 +394,7 @@ exec_avail:
   mov qword [cet_r14 + task.next], 1  ; 1 is null with locked bit set.
   ; Execute the task's instructions.  Tasks are responsibile for jumping back to
   ; free_pet__exec_avail.
-  jmp [cet_r14 + task.exec]
+  jmp/ind [cet_r14 + task.exec]
 
 .try_another:
   ; Try to take a task from another thread.
@@ -409,19 +409,19 @@ exec_avail:
   mov rsi, rdx
   mov rdx, cet_r14
   mov rax, cet_r14
-  mov rcx, 0
-  ;mov rbx, 0     ; already set
+  xor rcx, rcx
+  ;xor rbx, rbx     ; already set
   ; The queue's .tail field is also read and written by this 16-byte operation.
   ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
   lock cmpxchg16b [rsi + queue.head]
   jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
   ; Execute the task.
-  jmp [cet_r14 + task.exec]
+  jmp/ind [cet_r14 + task.exec]
 
 .not_head:
   ; Unlock the node which is no longer the head.
-  btr dword [cet_r14 + task.next], 0  ; Clear locked bit and preserve other bits.
+  btr qword [cet_r14 + task.next], 0  ; Clear locked bit and preserve other bits.
   jmp exec_avail
 
 

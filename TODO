@@ -1,6 +1,38 @@
+Investigate rearanging procedures for static branch prediction.  "Predict
+backward conditional branches to be taken.  Predict forward conditional branches
+to be NOT taken."
+
+"All branch targets should be 16-byte aligned."
+
+"If the body of a conditional is not likely to be executed, it should be placed
+in another part of the program. If it is highly unlikely to be executed and code
+locality is an issue, the body of the conditional should be placed on a
+different code page.  Careful arrangement of code can enhance cache and memory
+locality.  Likely sequences of basic blocks should be laid out contiguously in
+memory. This may involve pulling unlikely code, such as code to handle error
+conditions, out of that sequence."
+
 Use branch hint instruction prefixes.
 
+"Choose instructions with shorter latencies and fewer micro-ops. Favor single
+micro-operation instructions."
+
+"Avoid prefixes, especially multiple non-0F-prefixed opcodes."
+
+"Use the 32-bit versions of instructions in 64-bit mode to reduce code size
+unless the 64-bit version is necessary to access 64-bit data or additional
+registers.  When eight registers are sufficient for an algorithm, don’t use the
+registers that require an REX prefix. This will keep the code size smaller."
+
 Use pause instruction in spin-wait loops.
+
+Investigate assuming all Cabna code and data is in 32-bit address space, thus
+allowing 32-bit operations instead of 64-bit.  Is it possible to ensure it is
+located within 32-bit?
+
+Review the optimization guidline points again.
+
+
 
 Investigate having a ring of free task queues, so that if one queue is locked,
 the next is immediately tried, instead of just spin-waiting.
@@ -30,8 +62,6 @@ Make a simple Scheme-like interpreter written in assembly and using the task
 queueing and execution facilities.  I think this is an easy step towards using
 the parallel processing without having a compiler.  Useful parallel programs
 (including a compiler) can be interpreted.
-
-All instructions which set a register to 0 should use xor instead.
 
 Is xor better than btr for unlocking nodes?
 
