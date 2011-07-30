@@ -42,6 +42,18 @@
 %endmacro
 
 
+; Branch hints.
+%macro likely 1+
+  db 0x3E
+  %1
+%endmacro
+
+%macro unlikely 1+
+  db 0x2E
+  %1
+%endmacro
+
+
 ; Instances of all the below struc types must be aligned at 8-byte boundary, so
 ; that loads and stores of the fields are atomic.  Instances of task and queue
 ; strucs must be aligned at 128-byte boundary, for processor bus locking

@@ -45,7 +45,7 @@ alloc_task:
   ; locking it, because of concurrent threads.
   mov arg2_r9, [free_tasks + queue.head]
   test arg2_r9, arg2_r9
-  jz .get_new_space
+  unlikely jz .get_new_space
   ; Try to lock the head node for our use.
   lock bts qword [arg2_r9 + task.next], 0
   jc alloc_task  ; Another thread already has it locked.
@@ -59,7 +59,7 @@ alloc_task:
   mov rax, free_tasks
   xor rbx, rbx
   cmpxchg [arg2_r9 + task.head_of], rbx
-  jne .not_head  ; Another thread interfered.
+  unlikely jne .not_head  ; Another thread interfered.
 
   ; Check if there's a next node to be the new head.  (Could use xchg but that
   ; locks the memory, or could use xadd with 0 but that costs an addition.
@@ -100,7 +100,7 @@ alloc_task:
   ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
   lock cmpxchg16b [free_tasks + queue.head]
-  jne bug  ; Head node is still locked, so unequal cmp not possible.
+  unlikely jne bug  ; Head node is still locked, so unequal cmp not possible.
   jmp_ind ret_r13
 
 .not_head:
@@ -178,7 +178,7 @@ alloc_task:
   ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
   lock cmpxchg16b [arg1_r8 + queue.head]
-  jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
+  unlikely jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
   jmp_ind ret_r13  ; Return first block of new space.
 
 .mmap_failed:
@@ -231,7 +231,7 @@ enqueue_task:
   mov rax, ttq_r15
   xor rbx, rbx
   cmpxchg [arg3_r10 + task.tail_of], rbx
-  jne .not_tail  ; Another thread interfered.
+  unlikely jne .not_tail  ; Another thread interfered.
 
   ; Unlock the old tail node ASAP, so other threads doing dequeue can use it
   ; ASAP.  For other threads doing enqueue, it's still the queue.tail, but it's
@@ -261,7 +261,7 @@ enqueue_task:
   ; The queue's .tail field is also read and written by this 16-byte operation.
   ; Like above, the item node must be locked.
   lock cmpxchg16b [ttq_r15 + queue.head]
-  jne enqueue_task  ; Another thread interfered.
+  unlikely jne enqueue_task  ; Not possible. Other threads won't enqueue in ours.
   mov [arg2_r9 + task.head_of], ttq_r15
   jmp .done
 
@@ -304,7 +304,7 @@ free_pet__exec_avail:
   ; locking it, because of concurrent threads.
   mov rdi, [free_tasks + queue.tail]
   test rdi, rdi
-  jz .empty
+  unlikely jz .empty
   ; Try to lock the tail node for our use.
   lock bts qword [rdi + task.next], 0
   jc free_pet__exec_avail  ; Another thread already has it locked.
@@ -318,7 +318,7 @@ free_pet__exec_avail:
   mov rax, free_tasks
   xor rbx, rbx
   cmpxchg [rdi + task.tail_of], rbx
-  jne .not_tail  ; Another thread interfered.
+  unlikely jne .not_tail  ; Another thread interfered.
 
   ; Unlock the old tail node ASAP, so other threads doing dequeue can use it
   ; ASAP.  For other threads doing enqueue, it's still the queue.tail, but it's
@@ -366,7 +366,7 @@ exec_avail:
   mov rax, rdx
   xor rbx, rbx
   cmpxchg [cet_r14 + task.head_of], rbx
-  jne .not_head  ; Another thread interfered.
+  unlikely jne .not_head  ; Another thread interfered.
 
   ; Check if there's a next node to be the new head.  (Could use xchg but that
   ; locks the memory, or could use xadd with 0 but that costs an addition.
@@ -415,7 +415,7 @@ exec_avail:
   ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
   ; comparison.
   lock cmpxchg16b [rsi + queue.head]
-  jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
+  unlikely jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
   ; Execute the task.
   jmp_ind [cet_r14 + task.exec]
 

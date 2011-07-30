@@ -12,8 +12,6 @@ locality.  Likely sequences of basic blocks should be laid out contiguously in
 memory. This may involve pulling unlikely code, such as code to handle error
 conditions, out of that sequence."
 
-Use branch hint instruction prefixes.
-
 "Choose instructions with shorter latencies and fewer micro-ops. Favor single
 micro-operation instructions."
 
