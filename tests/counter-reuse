@@ -2,7 +2,7 @@ global main
 
 %include "cabna/iface"
 
-%assign count 100_000_000
+%assign count 200_000_000
 
 
 section .text
@@ -19,8 +19,7 @@ main:  ; (done (a n))
   mov qword [arg2_r9 + task.arg1], count
   mov [arg2_r9 + task.rcvr], r12
   mov qword [arg2_r9 + task.ridx], 1
-  mov ret_r13, exec_avail  ; Make enqueue_task return to this.
-  jmp enqueue_task  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
 
 
 done:  ; Exit program.
@@ -31,32 +30,30 @@ done:  ; Exit program.
 
 
 ; (define (a n) (b (- n 1)))
-a:
+JT a
   mov arg2_r9, cet_r14
   sub qword [arg2_r9 + task.arg1], 1
   mov qword [arg2_r9 + task.exec], b
-  mov ret_r13, exec_avail  ; Make enqueue_task return to this.
-  jmp enqueue_task  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
 
 
 
 ; (define (b n) (c (- n 2)))
-b:
+JT b
   mov arg2_r9, cet_r14
   sub qword [arg2_r9 + task.arg1], 2
   mov qword [arg2_r9 + task.exec], c
-  mov ret_r13, exec_avail  ; Make enqueue_task return to this.
-  jmp enqueue_task  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
 
 
 
 ; (define (c n) (if (<= n 0) n (a n)))
-c:
+JT c
   mov arg1_r8, [cet_r14 + task.arg1]
   cmp arg1_r8, 0
+  mov ret_r13, free_pet__exec_avail
   unlikely jle supply_retval
 
   mov arg2_r9, cet_r14
   mov qword [arg2_r9 + task.exec], a
-  mov ret_r13, exec_avail  ; Make enqueue_task return to this.
-  jmp enqueue_task  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set

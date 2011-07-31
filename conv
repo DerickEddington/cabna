@@ -28,10 +28,26 @@
 %define ret_r13   r13
 
 
-%macro jmp_ret 1
-  mov ret_r13, %%continuation
+; Jump targets aligned to 16-byte.
+%macro JT 1
+  align 16
+  %1:
+%endmacro
+
+%macro JTJ 1
   jmp %1
-  %%continuation:
+  JT %1
+%endmacro
+
+
+%macro jmp_ret_to 2
+  mov ret_r13, %2
+  jmp %1
+%endmacro
+
+%macro jmp_ret 1
+  jmp_ret_to %1, %%continuation
+  JT %%continuation
 %endmacro
 
 

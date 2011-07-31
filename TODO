@@ -24,12 +24,14 @@ registers that require an REX prefix. This will keep the code size smaller."
 
 Use pause instruction in spin-wait loops.
 
+Review the optimization guidline points again.
+
 Investigate assuming all Cabna code and data is in 32-bit address space, thus
 allowing 32-bit operations instead of 64-bit.  Is it possible to ensure it is
 located within 32-bit?
 
-Review the optimization guidline points again.
-
+When cmpxchg16b is used only for write-atomicity, is the lock prefix necessary?
+If the 16-byte write is atomic, then I think it's not.
 
 
 Investigate having a ring of free task queues, so that if one queue is locked,
