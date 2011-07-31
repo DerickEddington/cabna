@@ -8,7 +8,7 @@ global main
 section .text
 
 
-main:  ; (done (a n))
+proc main:  ; (done (a n))
   jmp_ret alloc_task
   mov qword [arg2_r9 + task.exec], done
   mov qword [arg2_r9 + task.need], 1
@@ -22,15 +22,15 @@ main:  ; (done (a n))
   jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
 
 
-done:  ; Exit program.
+proc done:  ; Exit program.
   mov rdi, [cet_r14 + task.arg1]
-  mov rax, 60  ; exit syscall number
+  mov eax, 60  ; exit syscall number
   syscall
 
 
 
 ; (define (a n) (b (- n 1)))
-JT a
+proc a:
   mov arg2_r9, cet_r14
   sub qword [arg2_r9 + task.arg1], 1
   mov qword [arg2_r9 + task.exec], b
@@ -39,7 +39,7 @@ JT a
 
 
 ; (define (b n) (c (- n 2)))
-JT b
+proc b:
   mov arg2_r9, cet_r14
   sub qword [arg2_r9 + task.arg1], 2
   mov qword [arg2_r9 + task.exec], c
@@ -48,10 +48,10 @@ JT b
 
 
 ; (define (c n) (if (<= n 0) n (a n)))
-JT c
+proc c:
   mov arg1_r8, [cet_r14 + task.arg1]
   cmp arg1_r8, 0
-  mov ret_r13, free_pet__exec_avail
+  mov r13d, free_pet__exec_avail
   unlikely jle supply_retval
 
   mov arg2_r9, cet_r14

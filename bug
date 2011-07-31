@@ -9,12 +9,12 @@ message_size  equ  $ - message
 section .text
 
 bug:
-  mov rdx, message_size
-  mov rsi, message
-  mov rdi, 1  ; stdout
-  mov rax, 1  ; write syscall number
+  mov edx, message_size
+  mov esi, message
+  mov edi, 1  ; stdout
+  mov eax, 1  ; write syscall number
   syscall
 
-  mov rdi, 7   ; exit code
-  mov rax, 60  ; exit syscall number
+  mov edi, 7   ; exit code
+  mov eax, 60  ; exit syscall number
   syscall

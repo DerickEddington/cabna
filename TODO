@@ -1,26 +1,11 @@
-Investigate rearanging procedures for static branch prediction.  "Predict
-backward conditional branches to be taken.  Predict forward conditional branches
-to be NOT taken."
-
-"All branch targets should be 16-byte aligned."
-
-"If the body of a conditional is not likely to be executed, it should be placed
-in another part of the program. If it is highly unlikely to be executed and code
-locality is an issue, the body of the conditional should be placed on a
-different code page.  Careful arrangement of code can enhance cache and memory
-locality.  Likely sequences of basic blocks should be laid out contiguously in
-memory. This may involve pulling unlikely code, such as code to handle error
-conditions, out of that sequence."
-
-"Choose instructions with shorter latencies and fewer micro-ops. Favor single
-micro-operation instructions."
-
 "Avoid prefixes, especially multiple non-0F-prefixed opcodes."
 
 "Use the 32-bit versions of instructions in 64-bit mode to reduce code size
 unless the 64-bit version is necessary to access 64-bit data or additional
 registers.  When eight registers are sufficient for an algorithm, don’t use the
 registers that require an REX prefix. This will keep the code size smaller."
+
+Use "test, test-and-set" because it allows only two threads to write to a lock.
 
 Use pause instruction in spin-wait loops.
 
@@ -33,6 +18,16 @@ located within 32-bit?
 When cmpxchg16b is used only for write-atomicity, is the lock prefix necessary?
 If the 16-byte write is atomic, then I think it's not.
 
+
+Investigate having pointers to pointers to queue strucs, which I think can allow
+atomically updating all queue struc fields via a single store instead of
+cmpxchg16b.  I'm imagining most of the procedures will remain the same, and only
+the cases for empty or also-tail will do this technique.  Where do the new queue
+strucs, to replace the old ones, come from?  If each thread has its own private
+free one, it can work on it and exchange it with the previous active shared one,
+and the previous one becomes its private free one.  Because a thread will work
+on only one queue at a time, it needs only one free struc to do this technique
+with any of the various queues.  Does this have any concurrency problems?
 
 Investigate having a ring of free task queues, so that if one queue is locked,
 the next is immediately tried, instead of just spin-waiting.
