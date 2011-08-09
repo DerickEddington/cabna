@@ -3,11 +3,11 @@ default rel
 
 
 global _start
-global free_pet__exec_avail
-global exec_avail
-global enqueue_task
 global alloc_task
+global enqueue_task
 global supply_retval
+global exec_avail
+global free_pet__exec_avail
 
 extern main
 extern bug
@@ -16,109 +16,62 @@ extern bug
 %include "cabna/conv"
 
 
+; It is assumed that all Cabna code and data is located in 32-bit address space,
+; which allows assuming Cabna addresses fit in 32 bits.  This is taken advantage
+; of to use 32-bit operations instead of 64-bit, as the processor manufacturers
+; recommend, when possible, for optimization, and also to fit two pointers in
+; r15.  Cabna is still a 64-bit system intended for 64-bit use, and 64-bit
+; addresses and operations are used for users' stuff and strucs that might be
+; allocated in 64-bit space.
+
+
+; Users' responsibilities:
+;  1) Task strucs must not be in more than one queue at a time.
+;  2) Task strucs must not be in the same queue more than once.
+;  3) The memory allocated by the OS for task strucs must never be returned to
+;     the OS.
+; It is assumed that users obey these responsibilities.
+
+
 
 
 section .text
 
-; TODO: Think about and note what registers the procedures destroy.
-
-; Users' responsibilities:
-;  1) Nodes must not be in more than one queue at a time.
-;  2) Nodes must not be in the same queue more than once.
-;  3) The memory allocated by the OS for nodes must never be returned to the OS.
-; This implementation assumes that users obey these responsibilities.
-
 
 proc alloc_task:
-  ; Get a free task struc, from the queue of free ones, or allocate more memory
-  ; from the OS for it, and return to ret_r13 with task pointer in arg2_r9.
+  ; Dequeue a free task struc, from the current thread's allocatable-tasks
+  ; queue, or allocate more memory from the OS, and return to ret_rsi with task
+  ; pointer in arg1_rdi.  Each thread has its own private allocatable-tasks
+  ; queue, so concurrency-safety is not needed.
+  ; Used registers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11.
 
-  ; Get the queue's head at this moment.  It might change before we get to
-  ; locking it, because of concurrent threads.
-  mov arg2_r9, [free_tasks + queue.head]
-  test arg2_r9, arg2_r9
+  mov arg1_rdi, [alloc_q_r15d + queue.head]
+  test arg1_rdi, arg1_rdi
   unlikely jz .get_new_space
-  ; Try to lock the head node for our use.
-  lock bts qword [arg2_r9 + task.next], 0
-  jc alloc_task  ; Another thread already has it locked.
-
-  ; Other threads cannot concurrently execute the rest of this procedure, for
-  ; the same head node.  This is what enables the concurrency-safety of this
-  ; queue implementation.
-
-  ; Check if concurrent interference happened.  If it's still the head, we can
-  ; use it.  If it's no longer the head, we cannot use it.
-  mov eax, free_tasks  ; Assumes it's in 32-bit space.
-  xor ebx, ebx
-  cmpxchg [arg2_r9 + task.head_of], rbx
-  unlikely jne .not_head  ; Another thread interfered.
-
-  ; Check if there's a next node to be the new head.  (Could use xchg but that
-  ; locks the memory, or could use xadd with 0 but that costs an addition.
-  ; Would either of these be faster, including for other threads trying to
-  ; access the same memory, than the below?)
-  mov rsi, [arg2_r9 + task.next]
-  xor rsi, 1  ; Clear locked bit and preserve other bits.
-  unlikely jz .also_tail  ; .next is null
-
-  ; We can set this field without concern about new_head concurrently being
-  ; accessed by other threads.  Concurrent dequeues cannot get to new_head yet.
-  ; Concurrent enqueues have an item that cannot be new_head (users'
-  ; responsibility), and have a tail that is not new_head, or the tail is
-  ; new_head and the .head_of field is not accessed by enqueue and the
-  ; new_head/tail remains locked until enqueue unlocks.  For this last case, our
-  ; setting of .head_of can occur before or after enqueue unlocks, and either is
-  ; fine because other waiting threads cannot proceed until both occur.
-  mov qword [rsi + task.head_of], free_tasks
-  ; Set the queue's new head ASAP, so other threads can use it ASAP.
-  mov [free_tasks + queue.head], rsi
-
-  ; The locked bit of the returned node remains true, and all other fields are
-  ; null.  Enqueue relies on item nodes having the state dequeue returns them
-  ; with.
-  mov qword [arg2_r9 + task.next], 1  ; 1 is null with locked bit set.
-  jmp_ind ret_r13
+  ; The next becomes the head, which might be null.
+  mov rax, [arg1_rdi + task.next]
+  mov [alloc_q_r15d + queue.head], rax
+  test rax, rax
+  jz .also_tail
+  mov qword [arg1_rdi + task.next], 0
+  jmp_ind ret_rsi
 
 .also_tail:
-  ; Since the node is locked, any other threads trying to access it as the tail
-  ; must wait.
-  mov qword [arg2_r9 + task.tail_of], 0
-  ; Remove head and tail, atomically.
-  mov rdx, arg2_r9
-  mov rax, arg2_r9
-  xor ecx, ecx
-  ;xor ebx, ebx     ; already set
-  ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
-  ; comparison.
-  lock cmpxchg16b [free_tasks + queue.head]
-  unlikely jne bug  ; Head node is still locked, so unequal cmp not possible.
-  jmp_ind ret_r13
-
-.not_head:
-  ; Unlock the node which is no longer the head.
-  btr qword [arg2_r9 + task.next], 0  ; Clear locked bit and preserve other bits.
-  jmp alloc_task
+  ; If the next is null, our struc was also the tail, so nullify queue's tail.
+  mov [alloc_q_r15d + queue.tail], rax
+  jmp_ind ret_rsi
 
 .get_new_space:
   ; Get some more space from the OS, divide it into blocks of task strucs, link
-  ; them together, and enqueue all-at-once.
-
-  ; Try to set the dummy locked node as head, to exclude other threads while we
-  ; work on adding the new space.
-  xor edx, edx
-  xor eax, eax
-  mov ecx, dummy_locked  ; Assumes it's in 32-bit space.
-  mov ebx, dummy_locked  ; Assumes it's in 32-bit space.
-  lock cmpxchg16b [free_tasks + queue.head]  ; Also accesses .tail field.
-  jne alloc_task  ; Another thread interfered.
+  ; them together, and enqueue all-at-once.  The fields of the new strucs are
+  ; null because mmap zeros, as needed for future operations.
 
   ; Save registers.
-  ;mov ?, arg2_r9
-  ;mov ?, arg1_r8
-  ;mov ?, arg3_r10
+  ;mov ?, r9
+  ;mov ?, r8
+  ;mov ?, r10
   ;mov ?, rdx
-  ;mov ?, rsi
+  mov [alloc_q_r15d + queue.head], ret_rsi  ; Just a temporary location.
   ;mov ?, rdi
   ;mov ?, rax  ; syscall destroys
   ;mov ?, rcx  ; syscall destroys
@@ -131,296 +84,179 @@ proc alloc_task:
   mov edx, 3                       ; prot = PROT_READ | PROT_WRITE
   mov esi, mmap_tasks * task_size  ; length
   xor edi, edi                     ; addr = NULL
-  mov eax, 9                       ; mmap syscall number, from disassembled glibc
+  mov eax, 9                       ; mmap syscall number
   syscall
-  ; This check for failure is taken from disassembled glibc.
-  cmp rax, -4095
-  jae .mmap_failed  ; Else, pointer to new space is in rax.
+  cmp rax, -4096
+  ja .mmap_failed
 
   ; Reserve first block for return value.
-  mov arg2_r9, rax
-  mov qword [rax + task.next], 1  ; Make it locked.  Needed by enqueue.
-  ; Other fields are null because mmap zeros, as enqueue needs.
-
-  ; Compute last possible block.
-  add rsi, rax  ; End of the space.
-  sub rsi, task_size
-
-  ; Setup new head
-  add rax, task_size  ; Head block
-  mov qword [rax + task.head_of], free_tasks
-
-.divide_and_link:
+  mov arg1_rdi, rax
   ; Divide remaining space into task strucs, and link together.
-  lea rcx, [rax + task_size]  ; Next block, maybe.
-  cmp rcx, rsi
-  ja .enqueue_chain
-  mov [rax + task.next], rcx  ; Lock bit not set.
-  mov rax, rcx
+  add rax, rsi  ; End of the space.
+  sub rax, task_size  ; Tail struc is the last block.
+  mov [alloc_q_r15d + queue.tail], rax
+.divide_and_link:
+  mov rdx, rax
+  sub rax, task_size
+  cmp rax, arg1_rdi
+  jbe .done
+  mov [rax + task.next], rdx
   jmp .divide_and_link
-
-.enqueue_chain:
-  mov qword [rax + task.tail_of], free_tasks
-  ; Set the queue to the chain of new blocks, atomically.
-  mov rcx, rax
-  lea rbx, [arg2_r9 + task_size]  ; Head block
-  mov edx, dummy_locked  ; Assumes it's in 32-bit space.
-  mov eax, dummy_locked  ; Assumes it's in 32-bit space.
-  ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
-  ; comparison.
-  lock cmpxchg16b [free_tasks + queue.head]
-  unlikely jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
-  jmp_ind ret_r13  ; Return first block of new space.
+.done:
+  mov ret_rsi, [alloc_q_r15d + queue.head]  ; Restore saved.
+  mov [alloc_q_r15d + queue.head], rdx
+  jmp_ind ret_rsi  ; Return first block of new space.
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
-  hlt
+  jmp bug
 
 
 
 
 proc supply_retval:
-  ; Return a value to a waiting task, argument in arg1_r8, and if the waiting
-  ; receiver task gets its final value, enqueue the task in the current thread's
-  ; task queue, and return to ret_r13.
+  ; Return a value to a waiting receiver task, argument in arg1_rdi.  If the
+  ; receiver task gets its final value, enqueue the task for execution.  Return
+  ; to ret_rsi.
+  ; Used registers: rax, rdx, rsi, rdi.
 
-  ; No other threads will access our currently executing task, so we can access
-  ; it without concurrency concern.
-  mov arg2_r9, [cet_r14 + task.rcvr]
-  mov arg3_r10, [cet_r14 + task.ridx]
+  ; No other threads will access our currently executing task struc, so we can
+  ; access it without concurrency concern.
+  mov rax, [cet_r14 + task.rcvr]
+  mov edx, [cet_r14 + task.ridx]  ; 32-bit alright.
   ; No other threads will access this field in rcvr, so we can access it without
   ; concurrency concern.
-  mov [arg2_r9 + task.args + 8 * arg3_r10], arg1_r8
+  mov [rax + task.args + 8 * rdx], arg1_rdi
   ; Other threads will access the .need field, so we must atomically decrement
   ; it.
-  lock sub qword [arg2_r9 + task.need], 1  ; TODO: Could be smaller than 64-bit. Better?
+  lock sub dword [rax + task.need], 1  ; 32-bit alright.
+  cmovz arg1_rdi, rax  ; For enqueue_task.
   ; Supplied the final needed argument to rcvr, so enqueue rcvr for execution.
-  jz enqueue_task  ; arg2_r9 and ret_r13 already set.
+  jz enqueue_task  ; ret_rsi already set.
   ; Receiver needs more.
-  jmp_ind ret_r13
+  jmp_ind ret_rsi
 
 
 
 
 proc enqueue_task:
-  ; Add a task to the current thread's task queue, argument in arg2_r9, and
-  ; return to ret_r13.
+  ; Enqueue a task in the current thread's executable-tasks queue, or another
+  ; thread's, argument in arg1_rdi, and return to ret_rsi.
+  ; Used registers: rax, rdx, rsi, rdi.
 
-  ; Get the queue's tail at this moment.  It might change before we get to
-  ; locking it, because of concurrent threads.
-  mov arg3_r10, [ttq_r15 + queue.tail]
-  test arg3_r10, arg3_r10
-  jz .empty
-  ; Try to lock the tail node for our use.
-  lock bts qword [arg3_r10 + task.next], 0
-  jc enqueue_task  ; Another thread already has it locked.
+  mov rdx, exec_q_r15
+  shr rdx, 32
+.try:
+  bt dword [edx + queue.next], 0
+  jc .another  ; Another thread already has it locked.
+  ; Try to lock the queue for our use.
+  lock bts dword [edx + queue.next], 0
+  unlikely jc .another  ; Another thread just locked it.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
-  ; the same tail node.  This is what enables the concurrency-safety of this
-  ; queue implementation.
+  ; the same queue.  This is what enables the concurrency-safety.
 
-  ; Check if concurrent interference happened.  If it's still the tail, we can
-  ; use it.  If it's no longer the tail, we cannot use it.
-  mov rax, ttq_r15
-  xor ebx, ebx
-  cmpxchg [arg3_r10 + task.tail_of], rbx
-  unlikely jne .not_tail  ; Another thread interfered.
-
-  ; Unlock the old tail node ASAP, so other threads doing dequeue can use it
-  ; ASAP.  For other threads doing enqueue, it's still the queue.tail, but it's
-  ; no longer task.tail_of the queue, so other threads will still wait.
-  mov [arg3_r10 + task.next], arg2_r9  ; Also unlocks by clearing lock bit.
-
-  ; The item node must be locked, because it becomes the queue's tail but it is
-  ; not yet ready.  We assume the item node is already locked and its other
-  ; fields are null, because dequeue leaves dequeued nodes in that state, and
-  ; because queue_node fields are private and users must not mess with them.
-  ; Because users must not put a node in more than one queue at a time, this
-  ; procedure can assume the item node will not be accessed by other threads
-  ; while we're using it.
-  mov [ttq_r15 + queue.tail], arg2_r9
-
+  mov rax, [edx + queue.tail]
+  test rax, rax
+  jz .empty
+  mov [rax + task.next], arg1_rdi
 .done:
-  mov [arg2_r9 + task.tail_of], ttq_r15
-  btr qword [arg2_r9 + task.next], 0  ; Unlock the new tail.
-  jmp_ind ret_r13
+  mov [edx + queue.tail], arg1_rdi
+  ; Unlock the queue.
+  and dword [edx + queue.next], -2  ; Clear lock bit.
+  jmp_ind ret_rsi
+
+.another:
+  ; Try to enqueue the task in another thread's queue.
+  mov edx, [edx + queue.next]
+  and edx, -2  ; Clear possibly-set lock bit.
+  jmp .try
 
 .empty:
-  ; Insert as head and tail, atomically.
-  xor edx, edx
-  xor eax, eax
-  mov rcx, arg2_r9
-  mov rbx, arg2_r9
-  ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Like above, the item node must be locked.
-  lock cmpxchg16b [ttq_r15 + queue.head]
-  unlikely jne enqueue_task  ; Not possible. Other threads won't enqueue in ours.
-  mov [arg2_r9 + task.head_of], ttq_r15
+  mov [edx + queue.head], arg1_rdi
   jmp .done
-
-.not_tail:
-  ; Unlock the node which is no longer the tail.
-  btr qword [arg3_r10 + task.next], 0  ; Clear locked bit and preserve other bits.
-  jmp enqueue_task
 
 
 
 
 proc free_pet__exec_avail:
-  ; Free the previously executing task by adding it to the free_tasks queue, and
-  ; continue into exec_avail.
+  ; Free the previously executing task by enqueueing it in the current thread's
+  ; allocatable-tasks queue, and continue into exec_avail.  Each thread has its
+  ; own private allocatable-tasks queue, so concurrency-safety is not needed.
+  ; Used registers: rax, and those of exec_avail.
 
-  ; Get the queue's tail at this moment.  It might change before we get to
-  ; locking it, because of concurrent threads.
-  mov rdi, [free_tasks + queue.tail]
-  test rdi, rdi
-  unlikely jz .empty
-  ; Try to lock the tail node for our use.
-  lock bts qword [rdi + task.next], 0
-  jc free_pet__exec_avail  ; Another thread already has it locked.
-
-  ; Other threads cannot concurrently execute the rest of this procedure, for
-  ; the same tail node.  This is what enables the concurrency-safety of this
-  ; queue implementation.
-
-  ; Check if concurrent interference happened.  If it's still the tail, we can
-  ; use it.  If it's no longer the tail, we cannot use it.
-  mov eax, free_tasks  ; Assumes it's in 32-bit space.
-  xor ebx, ebx
-  cmpxchg [rdi + task.tail_of], rbx
-  unlikely jne .not_tail  ; Another thread interfered.
-
-  ; Unlock the old tail node ASAP, so other threads doing dequeue can use it
-  ; ASAP.  For other threads doing enqueue, it's still the queue.tail, but it's
-  ; no longer task.tail_of the queue, so other threads will still wait.
-  mov [rdi + task.next], cet_r14  ; Also unlocks by clearing lock bit.
-
-  ; The item node must be locked, because it becomes the queue's tail but it is
-  ; not yet ready.  We assume the item node is already locked and its other
-  ; fields are null, because dequeue leaves dequeued nodes in that state, and
-  ; because queue_node fields are private and users must not mess with them.
-  ; Because users must not put a node in more than one queue at a time, this
-  ; procedure can assume the item node will not be accessed by other threads
-  ; while we're using it.
-  mov [free_tasks + queue.tail], cet_r14
-
+  mov rax, [alloc_q_r15d + queue.tail]
+  test rax, rax
+  jz .empty
+  mov [rax + task.next], cet_r14
 .done:
-  mov qword [cet_r14 + task.tail_of], free_tasks
-  btr qword [cet_r14 + task.next], 0  ; Unlock new tail.
+  mov [alloc_q_r15d + queue.tail], cet_r14
   jmp exec_avail
 
 .empty:
-  ; Insert as head and tail, atomically.
-  xor edx, edx
-  xor eax, eax
-  mov rcx, cet_r14
-  mov rbx, cet_r14
-  ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Like below, the item node must be locked.
-  lock cmpxchg16b [free_tasks + queue.head]
-  jne free_pet__exec_avail  ; Another thread interfered.
-  mov qword [cet_r14 + task.head_of], free_tasks
+  mov [alloc_q_r15d + queue.head], cet_r14
   jmp .done
-
-.not_tail:
-  ; Unlock the node which is no longer the tail.
-  btr qword [rdi + task.next], 0  ; Clear locked bit and preserve other bits.
-  jmp free_pet__exec_avail
 
 
 
 
 proc exec_avail:
-  ; Get the next task from the current thread's task queue, or from another
-  ; thread's, and execute the task.
+  ; Dequeue the oldest task from the current thread's executable-tasks queue, or
+  ; from another thread's, and execute the task with cet_r14 set to the task.
+  ; Used registers: rax, rdx, r14
 
-  mov rdx, ttq_r15
-.get_head:
-  ; Get the queue's head at this moment.  It might change before we get to
-  ; locking it, because of concurrent threads.
-  mov cet_r14, [rdx + queue.head]
-  test cet_r14, cet_r14
-  jz .try_another
-  ; Try to lock the head node for our use.
-  lock bts qword [cet_r14 + task.next], 0
-  jc exec_avail  ; Another thread already has it locked.
+  mov rdx, exec_q_r15
+  shr rdx, 32
+.try:
+  bt dword [edx + queue.next], 0
+  jc .another  ; Another thread already has it locked.
+  ; Try to lock the queue for our use.
+  lock bts dword [edx + queue.next], 0
+  unlikely jc .another  ; Another thread just locked it.
 
   ; Other threads cannot concurrently execute the rest of this procedure, for
-  ; the same head node.  This is what enables the concurrency-safety of this
-  ; queue implementation.
+  ; the same queue.  This is what enables the concurrency-safety.
 
-  ; Check if concurrent interference happened.  If it's still the head, we can
-  ; use it.  If it's no longer the head, we cannot use it.
-  mov rax, rdx
-  xor ebx, ebx
-  cmpxchg [cet_r14 + task.head_of], rbx
-  unlikely jne .not_head  ; Another thread interfered.
-
-  ; Check if there's a next node to be the new head.  (Could use xchg but that
-  ; locks the memory, or could use xadd with 0 but that costs an addition.
-  ; Would either of these be faster, including for other threads trying to
-  ; access the same memory, than the below?)
-  mov rsi, [cet_r14 + task.next]
-  xor rsi, 1  ; Clear locked bit and preserve other bits.
-  jz .also_tail  ; .next is null
-
-  ; We can set this field without concern about new_head concurrently being
-  ; accessed by other threads.  Concurrent dequeues cannot get to new_head yet.
-  ; Concurrent enqueues have an item that cannot be new_head (users'
-  ; responsibility), and have a tail that is not new_head, or the tail is
-  ; new_head and the .head_of field is not accessed by enqueue and the
-  ; new_head/tail remains locked until enqueue unlocks.  For this last case, our
-  ; setting of .head_of can occur before or after enqueue unlocks, and either is
-  ; fine because other waiting threads cannot proceed until both occur.
-  mov [rsi + task.head_of], rdx
-  ; Set the queue's new head ASAP, so other threads can use it ASAP.
-  mov [rdx + queue.head], rsi
-
-  ; The locked bit of the dequeued node remains true, and all other fields are
-  ; null.  Enqueue relies on item nodes having the state dequeue returns them
-  ; with.
-  mov qword [cet_r14 + task.next], 1  ; 1 is null with locked bit set.
-  ; Execute the task's instructions.  Tasks are responsibile for jumping back to
-  ; free_pet__exec_avail.
+  mov cet_r14, [edx + queue.head]
+  test cet_r14, cet_r14
+  jz .another_unlock
+  ; The next becomes the head, which might be null.
+  mov rax, [cet_r14 + task.next]
+  mov [edx + queue.head], rax
+  test rax, rax
+  jz .also_tail
+  mov qword [cet_r14 + task.next], 0
+.done:
+  ; Unlock the queue.
+  and dword [edx + queue.next], -2  ; Clear lock bit.
+  ; Execute the task's instructions.  Tasks are responsibile for giving control
+  ; back to exec_evail.
   jmp_ind [cet_r14 + task.exec]
 
-.try_another:
+.another_unlock:
+  ; Unlock the empty queue.
+  and dword [edx + queue.next], -2  ; Clear lock bit.
+.another:
   ; Try to take a task from another thread.
-  mov rdx, [rdx + queue.next]
-  jmp .get_head
+  mov edx, [edx + queue.next]
+  and edx, -2  ; Clear possibly-set lock bit.
+  jmp .try
 
 .also_tail:
-  ; Since the node is locked, any other threads trying to access it as the tail
-  ; must wait.
-  mov qword [cet_r14 + task.tail_of], 0
-  ; Remove head and tail, atomically.
-  mov rsi, rdx
-  mov rdx, cet_r14
-  mov rax, cet_r14
-  xor ecx, ecx
-  ;xor ebx, ebx     ; already set
-  ; The queue's .tail field is also read and written by this 16-byte operation.
-  ; Here, cmpxchg16b is needed only for 16-byte write atomicity, not for
-  ; comparison.
-  lock cmpxchg16b [rsi + queue.head]
-  unlikely jne bug  ; Head/tail node is still locked, so unequal cmp not possible.
-  ; Execute the task.
-  jmp_ind [cet_r14 + task.exec]
-
-.not_head:
-  ; Unlock the node which is no longer the head.
-  btr qword [cet_r14 + task.next], 0  ; Clear locked bit and preserve other bits.
-  jmp exec_avail
-
+  ; If the next is null, our struc was also the tail, so nullify queue's tail.
+  mov [edx + queue.tail], rax
+  jmp .done
 
 
 
 ; Entry point.
 ; TODO: This will need to change for multiple threads.
 proc _start:
-  ; Set the threads' task queue registers.
-  mov r15d, thread0_tasks  ; Assumes it's in 32-bit space.
+  ; Set the threads' executable-tasks and allocatable-tasks queues register.
+  mov r15d, t0_exec_q  ; Assumes it's in 32-bit space.
+  shl r15, 32          ; It lives in the high 32 bits.
+  mov eax, t0_alloc_q  ; Assumes it's in 32-bit space.
+  or r15, rax          ; It lives in the low 32 bits.
   jmp main
 
 
@@ -430,62 +266,66 @@ section .data  align=128
 
 ; Strucs are aligned at 128-byte boundary because this makes the processor bus
 ; locking used for atomic operations more efficient.  It also makes the needed
-; 8-byte alignment for atomic field access, and the needed 16-byte alignment for
-; cmpxchg16b.
+; 8-byte alignment for atomic field access.
 
 
-; Threads' task queues.
+; Threads' executable-tasks queues.
 
-%assign ttq 0
-
+%assign n 0
 %rep amount_threads
-
-thread%[ttq]_tasks:
-
-%assign ttq  (ttq + 1) % amount_threads  ; Last's .next = first.
-
-  istruc queue
-    at queue.head, dq 0
-    at queue.tail, dq 0
-    at queue.next, dq thread%[ttq]_tasks
-  iend
 
 align 128, db 0
 
+t%[n]_exec_q:
+
+%assign n  (n + 1) % amount_threads  ; Last's .next = first.
+
+  istruc queue
+    at queue.next, dq t%[n]_exec_q  ; Lock bit not set.
+    at queue.head, dq 0
+    at queue.tail, dq 0
+  iend
 %endrep
 
 
 
 
-; Free task strucs queue.
+; Threads' allocatable-tasks queues.
 
-;align 128, db 0  ; Not needed because it was just done above.
+%assign n 0
+%rep amount_threads
 
-free_tasks:
+align 128, db 0  ; Actually not necessary, because these aren't locked.
+
+t%[n]_alloc_q:
 
   istruc queue
-    at queue.head, dq free_tasks_head
-    at queue.tail, dq free_tasks_tail
     at queue.next, dq 0  ; Never used.
+    at queue.head, dq t%[n]_alloc_q_head
+    at queue.tail, dq t%[n]_alloc_q_tail
   iend
 
+%assign n  n + 1
+%endrep
 
 
 
-; Statically-allocated and initialized free task strucs for the free_tasks
-; queue.
+
+; Statically-allocated and initialized task strucs for the allocatable-tasks
+; queues.
 
 align 128, db 0
 
 ; Task strucs are 128-bytes long, which preserves their 128-byte alignment when
 ; they are contiguously located like below.
 
-free_tasks_head:
+%assign n 0
+%rep amount_threads
+
+t%[n]_alloc_q_head:
 
   istruc task
-    at task.next,    dq free_task_1  ; Lock bit not set.
-    at task.head_of, dq free_tasks
-    at task.tail_of, dq 0
+    at task.next,    dq t%[n]_alloc_q_1
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -499,19 +339,18 @@ free_tasks_head:
     at task.arg7,    dq 0
     at task.arg8,    dq 0
     at task.arg9,    dq 0
+    at task.arg10,   dq 0
+    at task.arg11,   dq 0
   iend
 
 
-free_task_1:
+t%[n]_alloc_q_1:
 
-%assign ft 2
-
+%assign a 2
 %rep statically_allocated_free_tasks - 2
 
   istruc task
-    at task.next,    dq free_task_%[ft]  ; Lock bit not set.
-    at task.head_of, dq 0
-    at task.tail_of, dq 0
+    at task.next,    dq t%[n]_alloc_q_%[a]
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -525,21 +364,20 @@ free_task_1:
     at task.arg7,    dq 0
     at task.arg8,    dq 0
     at task.arg9,    dq 0
+    at task.arg10,   dq 0
+    at task.arg11,   dq 0
   iend
 
-free_task_%[ft]:
+t%[n]_alloc_q_%[a]:
 
-%assign ft  ft + 1
-
+%assign a  a + 1
 %endrep
 
 
-free_tasks_tail:
+t%[n]_alloc_q_tail:
 
   istruc task
-    at task.next,    dq 0  ; Lock bit not set.
-    at task.head_of, dq 0
-    at task.tail_of, dq free_tasks
+    at task.next,    dq 0
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -553,28 +391,9 @@ free_tasks_tail:
     at task.arg7,    dq 0
     at task.arg8,    dq 0
     at task.arg9,    dq 0
+    at task.arg10,   dq 0
+    at task.arg11,   dq 0
   iend
 
-
-
-
-dummy_locked:
-
-  istruc task
-    at task.next,    dq 1     ; Lock bit is set.
-    at task.head_of, dq 0
-    at task.tail_of, dq 0
-    at task.rcvr,    dq 0
-    at task.ridx,    dq 0
-    at task.need,    dq 0
-    at task.exec,    dq 0
-    at task.arg1,    dq 0
-    at task.arg2,    dq 0
-    at task.arg3,    dq 0
-    at task.arg4,    dq 0
-    at task.arg5,    dq 0
-    at task.arg6,    dq 0
-    at task.arg7,    dq 0
-    at task.arg8,    dq 0
-    at task.arg9,    dq 0
-  iend
+%assign n  n + 1
+%endrep

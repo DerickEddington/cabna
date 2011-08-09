@@ -10,16 +10,16 @@ section .text
 
 proc main:  ; (done (a n))
   jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], done
-  mov qword [arg2_r9 + task.need], 1
-  mov r12, arg2_r9
+  mov qword [arg1_rdi + task.exec], done
+  mov qword [arg1_rdi + task.need], 1
+  mov rbx, arg1_rdi
 
   jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], a
-  mov qword [arg2_r9 + task.arg1], count
-  mov [arg2_r9 + task.rcvr], r12
-  mov qword [arg2_r9 + task.ridx], 1
-  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
+  mov qword [arg1_rdi + task.exec], a
+  mov qword [arg1_rdi + task.arg1], count
+  mov [arg1_rdi + task.rcvr], rbx
+  mov qword [arg1_rdi + task.ridx], 1
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
 
 
 proc done:  ; Exit program.
@@ -31,29 +31,29 @@ proc done:  ; Exit program.
 
 ; (define (a n) (b (- n 1)))
 proc a:
-  mov arg2_r9, cet_r14
-  sub qword [arg2_r9 + task.arg1], 1
-  mov qword [arg2_r9 + task.exec], b
-  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
+  mov arg1_rdi, cet_r14
+  sub qword [arg1_rdi + task.arg1], 1
+  mov qword [arg1_rdi + task.exec], b
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
 
 
 
 ; (define (b n) (c (- n 2)))
 proc b:
-  mov arg2_r9, cet_r14
-  sub qword [arg2_r9 + task.arg1], 2
-  mov qword [arg2_r9 + task.exec], c
-  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
+  mov arg1_rdi, cet_r14
+  sub qword [arg1_rdi + task.arg1], 2
+  mov qword [arg1_rdi + task.exec], c
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
 
 
 
 ; (define (c n) (if (<= n 0) n (a n)))
 proc c:
-  mov arg1_r8, [cet_r14 + task.arg1]
-  cmp arg1_r8, 0
-  mov r13d, free_pet__exec_avail
+  mov arg1_rdi, [cet_r14 + task.arg1]
+  test arg1_rdi, arg1_rdi
+  mov esi, free_pet__exec_avail
   unlikely jle supply_retval
 
-  mov arg2_r9, cet_r14
-  mov qword [arg2_r9 + task.exec], a
-  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
+  mov arg1_rdi, cet_r14
+  mov qword [arg1_rdi + task.exec], a
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set

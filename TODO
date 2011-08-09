@@ -1,51 +1,7 @@
-"Avoid prefixes, especially multiple non-0F-prefixed opcodes."
-
-"Use the 32-bit versions of instructions in 64-bit mode to reduce code size
-unless the 64-bit version is necessary to access 64-bit data or additional
-registers.  When eight registers are sufficient for an algorithm, don’t use the
-registers that require an REX prefix. This will keep the code size smaller."
-
-Use "test, test-and-set" because it allows only two threads to write to a lock.
-
-Use pause instruction in spin-wait loops.
+When there's nothing for a thread to do, they'll spin a lot, so should a pause
+instruction be used somewhere in the spin?
 
 Review the optimization guidline points again.
-
-Investigate assuming all Cabna code and data is in 32-bit address space, thus
-allowing 32-bit operations instead of 64-bit.  Is it possible to ensure it is
-located within 32-bit?
-
-When cmpxchg16b is used only for write-atomicity, is the lock prefix necessary?
-If the 16-byte write is atomic, then I think it's not.
-
-
-Investigate having pointers to pointers to queue strucs, which I think can allow
-atomically updating all queue struc fields via a single store instead of
-cmpxchg16b.  I'm imagining most of the procedures will remain the same, and only
-the cases for empty or also-tail will do this technique.  Where do the new queue
-strucs, to replace the old ones, come from?  If each thread has its own private
-free one, it can work on it and exchange it with the previous active shared one,
-and the previous one becomes its private free one.  Because a thread will work
-on only one queue at a time, it needs only one free struc to do this technique
-with any of the various queues.  Does this have any concurrency problems?
-
-Investigate having a ring of free task queues, so that if one queue is locked,
-the next is immediately tried, instead of just spin-waiting.
-
-Investigate using xmm register for 128-bit atomic store for reseting queue.head
-and .tail, instead of locked cmpxchg16b.  The unnecessary cmp and the lock would
-be avoided.  I think the xmm register should be preserved by temporarily saving
-it before using and then restoring.
-
-task.rcvr and task.ridx can be consolidated into the same field, because tasks
-are 128-byte aligned, pointers to them have 7 unused low bits which is more than
-enough for ridx up to 11.  This gives another argument field.
-
-What if the argX_R macros are changed so that they don't conflict with syscall
-registers?  Or maybe they should follow the Unix ABI, except the return
-register.
-
-Explain why task.head_of and .tail_of fields are necessary.
 
 Do some testing with only one thread, before implementing multiple threads.
 
@@ -57,14 +13,5 @@ Make a simple Scheme-like interpreter written in assembly and using the task
 queueing and execution facilities.  I think this is an easy step towards using
 the parallel processing without having a compiler.  Useful parallel programs
 (including a compiler) can be interpreted.
-
-Is xor better than btr for unlocking nodes?
-
-Investigate opportunities to optimize assembly source for speed and size, such
-as "mov byte" instead of "mov qword".
-
-Investigate whether using rsi as a temp is the best idea or not.  Why destroy it
-if not necessary if arg3 or arg4 can be used instead?  Is using an rX register
-slower than legacy registers?
 
 Investigate what NASM directives are neccessary to make a shared library.

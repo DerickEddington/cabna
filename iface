@@ -1,7 +1,7 @@
-extern free_pet__exec_avail
-extern exec_avail
-extern enqueue_task
 extern alloc_task
+extern enqueue_task
 extern supply_retval
+extern exec_avail
+extern free_pet__exec_avail
 
 %include "cabna/conv"

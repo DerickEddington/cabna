@@ -10,16 +10,16 @@ section .text
 
 proc main:  ; (done (a n))
   jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], done
-  mov qword [arg2_r9 + task.need], 1
-  mov r12, arg2_r9
+  mov qword [arg1_rdi + task.exec], done
+  mov qword [arg1_rdi + task.need], 1
+  mov rbx, arg1_rdi
 
   jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], a
-  mov qword [arg2_r9 + task.arg1], count
-  mov [arg2_r9 + task.rcvr], r12
-  mov qword [arg2_r9 + task.ridx], 1
-  jmp_ret_to enqueue_task, exec_avail  ; arg2_r9 already set
+  mov qword [arg1_rdi + task.exec], a
+  mov qword [arg1_rdi + task.arg1], count
+  mov [arg1_rdi + task.rcvr], rbx
+  mov qword [arg1_rdi + task.ridx], 1
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
 
 
 proc done:  ; Exit program.
@@ -32,54 +32,56 @@ proc done:  ; Exit program.
 ; (define (a n) (b (- n 1)))
 proc a:
   jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], b
+  mov qword [arg1_rdi + task.exec], b
 
   mov rax, [cet_r14 + task.arg1]
   sub rax, 1
-  mov [arg2_r9 + task.arg1], rax
+  mov [arg1_rdi + task.arg1], rax
 
   mov rax, [cet_r14 + task.rcvr]
-  mov [arg2_r9 + task.rcvr], rax
+  mov [arg1_rdi + task.rcvr], rax
   mov rax, [cet_r14 + task.ridx]
-  mov [arg2_r9 + task.ridx], rax
+  mov [arg1_rdi + task.ridx], rax
 
-  jmp_ret_to enqueue_task, free_pet__exec_avail  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, free_pet__exec_avail  ; arg1_rdi already set
 
 
 
 ; (define (b n) (c (- n 2)))
 proc b:
   jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], c
+  mov qword [arg1_rdi + task.exec], c
 
   mov rax, [cet_r14 + task.arg1]
   sub rax, 2
-  mov [arg2_r9 + task.arg1], rax
+  mov [arg1_rdi + task.arg1], rax
 
   mov rax, [cet_r14 + task.rcvr]
-  mov [arg2_r9 + task.rcvr], rax
+  mov [arg1_rdi + task.rcvr], rax
   mov rax, [cet_r14 + task.ridx]
-  mov [arg2_r9 + task.ridx], rax
+  mov [arg1_rdi + task.ridx], rax
 
-  jmp_ret_to enqueue_task, free_pet__exec_avail  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, free_pet__exec_avail  ; arg1_rdi already set
 
 
 
 ; (define (c n) (if (<= n 0) n (a n)))
 proc c:
-  mov arg1_r8, [cet_r14 + task.arg1]
-  cmp arg1_r8, 0
-  mov r13d, free_pet__exec_avail
+  mov arg1_rdi, [cet_r14 + task.arg1]
+  test arg1_rdi, arg1_rdi
+  mov esi, free_pet__exec_avail
   unlikely jle supply_retval
 
-  jmp_ret alloc_task
-  mov qword [arg2_r9 + task.exec], a
+  mov rbx, arg1_rdi
 
-  mov [arg2_r9 + task.arg1], arg1_r8
+  jmp_ret alloc_task
+  mov qword [arg1_rdi + task.exec], a
+
+  mov [arg1_rdi + task.arg1], rbx
 
   mov rax, [cet_r14 + task.rcvr]
-  mov [arg2_r9 + task.rcvr], rax
+  mov [arg1_rdi + task.rcvr], rax
   mov rax, [cet_r14 + task.ridx]
-  mov [arg2_r9 + task.ridx], rax
+  mov [arg1_rdi + task.ridx], rax
 
-  jmp_ret_to enqueue_task, free_pet__exec_avail  ; arg2_r9 already set
+  jmp_ret_to enqueue_task, free_pet__exec_avail  ; arg1_rdi already set
