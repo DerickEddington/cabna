@@ -24,7 +24,7 @@ proc main:  ; (done (a n))
 
 proc done:  ; Exit program.
   mov rdi, [cet_r14 + task.arg1]
-  mov eax, 60  ; exit syscall number
+  mov eax, 231  ; exit_group syscall number
   syscall
 
 

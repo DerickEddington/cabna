@@ -1,6 +1,9 @@
 ;--- User may modify these. ----------------------------------------------------
 
-%assign amount_threads 1
+%assign amount_threads 2
+
+; The size of a thread's stack, except the initial thread's.
+%assign stack_size 4 * 4096
 
 ; The amount of pre-allocated free task strucs per thread.  Different programs
 ; will need different amounts depending on the program, and so possibly have to
@@ -46,7 +49,8 @@
 
 ; Indirect jump, more efficiently.
 %macro jmp_ind 1+
-  jmp %1
+  likely jmp %1  ; NOTE: Intel documents say branch-hints are only for Jcc
+                 ; instructions, but the use here seems to improve speed.
   ud2  ; help branch misprediction
 %endmacro
 
@@ -125,8 +129,24 @@ endstruc
 
 
 
+%if amount_threads < 1
+  %fatal "amount_threads, " amount_threads ", less than 1."
+%endif
+
+%if stack_size < 16 * 1024
+  %error "stack_size, " stack_size ", less than 16 KB."
+%endif
+
+%if stack_size % 4096 != 0
+  %warning "stack_size, " stack_size ", not a multiple of page size."
+%endif
+
 %if statically_allocated_free_tasks < 2
-  %warning "statically_allocated_free_tasks less than 2."
+  %fatal "statically_allocated_free_tasks, " statically_allocated_free_tasks ", less than 2."
+%endif
+
+%if mmap_tasks < 1
+  %error "mmap_tasks, " mmap_tasks ", less than 1."
 %endif
 
 %if (mmap_tasks * task_size) % 4096 != 0

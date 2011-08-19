@@ -1,13 +1,16 @@
-When there's nothing for a thread to do, they'll spin a lot, so should a pause
-instruction be used somewhere in the spin?
+Investigate multi-threading via print-outs.
 
-Review the optimization guidline points again.
+Investigate the performance of making threads spin-wait for their own exec queue
+instead of trying other threads'.  Maybe rearrange jumping so that pause only
+happens if spinning.  exec_avail still needs to try other threads' if its is
+empty.
 
-Do some testing with only one thread, before implementing multiple threads.
+Investigate creating more than 2 threads.
 
-Implement thread creation per number of processors, at program start-up.  This
-will allow exploring parallelism, even though the thread creation design might
-change in the future.  I think using Linux's clone is the way to go.
+Determine the stack size given to the initial thread.  Decide what size to give
+other threads.  Minimum is 16384 (16 kb, 4 pages).
+
+Review the optimization guideline points again.
 
 Make a simple Scheme-like interpreter written in assembly and using the task
 queueing and execution facilities.  I think this is an easy step towards using

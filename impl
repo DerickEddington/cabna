@@ -52,7 +52,7 @@ proc alloc_task:
   mov rax, [arg1_rdi + task.next]
   mov [alloc_q_r15d + queue.head], rax
   test rax, rax
-  jz .also_tail
+  unlikely jz .also_tail
   mov qword [arg1_rdi + task.next], 0
   jmp_ind ret_rsi
 
@@ -148,7 +148,7 @@ proc enqueue_task:
   shr rdx, 32
 .try:
   bt dword [edx + queue.next], 0
-  jc .another  ; Another thread already has it locked.
+  unlikely jc .another  ; Another thread already has it locked.
   ; Try to lock the queue for our use.
   lock bts dword [edx + queue.next], 0
   unlikely jc .another  ; Another thread just locked it.
@@ -170,6 +170,7 @@ proc enqueue_task:
   ; Try to enqueue the task in another thread's queue.
   mov edx, [edx + queue.next]
   and edx, -2  ; Clear possibly-set lock bit.
+  pause
   jmp .try
 
 .empty:
@@ -187,7 +188,7 @@ proc free_pet__exec_avail:
 
   mov rax, [alloc_q_r15d + queue.tail]
   test rax, rax
-  jz .empty
+  unlikely jz .empty
   mov [rax + task.next], cet_r14
 .done:
   mov [alloc_q_r15d + queue.tail], cet_r14
@@ -209,7 +210,7 @@ proc exec_avail:
   shr rdx, 32
 .try:
   bt dword [edx + queue.next], 0
-  jc .another  ; Another thread already has it locked.
+  unlikely jc .another  ; Another thread already has it locked.
   ; Try to lock the queue for our use.
   lock bts dword [edx + queue.next], 0
   unlikely jc .another  ; Another thread just locked it.
@@ -240,6 +241,7 @@ proc exec_avail:
   ; Try to take a task from another thread.
   mov edx, [edx + queue.next]
   and edx, -2  ; Clear possibly-set lock bit.
+  pause
   jmp .try
 
 .also_tail:
@@ -249,15 +251,71 @@ proc exec_avail:
 
 
 
-; Entry point.
-; TODO: This will need to change for multiple threads.
+
 proc _start:
+  ; Entry point.
+
+  xor ebp, ebp  ; Unix ABI says to do this.
+  ; TODO?: Unix ABI says rdx is a function pointer to register with atexit.
+
+  mov ebx, amount_threads
+
+.loop:
+  sub ebx, 1
+  jz .done
+
+  ; Get space for the threads' stacks, via mmap.
+  xor r9d, r9d         ; pgoffset
+  mov r8, dword -1     ; fd
+  mov r10d, 0x20022    ; flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK
+  mov edx, 3           ; prot = PROT_READ | PROT_WRITE
+  mov esi, stack_size  ; length
+  xor edi, edi         ; addr = NULL
+  mov eax, 9           ; mmap syscall number
+  syscall
+  cmp rax, -4096
+  ja .mmap_failed
+
+  ; Create the threads using clone.
+  xor r8d, r8d         ; tls = NULL
+  xor r10d, r10d       ; ctid = NULL
+  xor edx, edx         ; ptid = NULL
+  add rax, stack_size
+  mov rsi, rax         ; child_stack = end of mmap'ed memory
+  mov edi, 0x80012F00  ; flags = CLONE_FILES | CLONE_FS | CLONE_IO | CLONE_PTRACE
+                       ;         | CLONE_SIGHAND | CLONE_THREAD | CLONE_VM
+  mov eax, 56          ; clone syscall number
+  syscall
+  cmp rax, -4096
+  ja .clone_failed
+
+  test rax, rax
+  jnz .loop  ; Caller of clone does this.
+
+  ; New threads do this.
+
+.done:
   ; Set the threads' executable-tasks and allocatable-tasks queues register.
-  mov r15d, t0_exec_q  ; Assumes it's in 32-bit space.
-  shl r15, 32          ; It lives in the high 32 bits.
-  mov eax, t0_alloc_q  ; Assumes it's in 32-bit space.
-  or r15, rax          ; It lives in the low 32 bits.
-  jmp main
+  ; Multiply thread ID by 128: the offset of the thread's queues' addresses.
+  shl ebx, 7
+  ; The executable-tasks queue.
+  lea r15d, [ts_exec_qs + ebx]  ; Assumes it's in 32-bit space.
+  shl r15, 32  ; It lives in the high 32 bits.
+  ; The allocatable-tasks queue.
+  lea eax, [ts_alloc_qs + ebx]  ; Assumes it's in 32-bit space.
+  or r15, rax  ; It lives in the low 32 bits.
+  ; Begin executing the user's program.
+  test ebx, ebx
+  jz main  ; Initial thread, thread 0, does this.
+  jmp exec_avail  ; Other threads do this.  TODO?: Delay a bit first?
+
+.mmap_failed:
+  ; TODO: Negated error code is in rax, print to stderr, and do something...
+  jmp bug
+
+.clone_failed:
+  ; TODO: Negated error code is in rax, print to stderr, and do something...
+  jmp bug
 
 
 
@@ -266,15 +324,15 @@ section .data  align=128
 
 ; Strucs are aligned at 128-byte boundary because this makes the processor bus
 ; locking used for atomic operations more efficient.  It also makes the needed
-; 8-byte alignment for atomic field access.
+; 8-byte alignment for atomic field access.  _start also takes advantage of it.
 
 
 ; Threads' executable-tasks queues.
 
+ts_exec_qs:
+
 %assign n 0
 %rep amount_threads
-
-align 128, db 0
 
 t%[n]_exec_q:
 
@@ -285,6 +343,9 @@ t%[n]_exec_q:
     at queue.head, dq 0
     at queue.tail, dq 0
   iend
+
+align 128, db 0
+
 %endrep
 
 
@@ -292,10 +353,10 @@ t%[n]_exec_q:
 
 ; Threads' allocatable-tasks queues.
 
+ts_alloc_qs:
+
 %assign n 0
 %rep amount_threads
-
-align 128, db 0  ; Actually not necessary, because these aren't locked.
 
 t%[n]_alloc_q:
 
@@ -305,6 +366,8 @@ t%[n]_alloc_q:
     at queue.tail, dq t%[n]_alloc_q_tail
   iend
 
+align 128, db 0
+
 %assign n  n + 1
 %endrep
 
@@ -312,12 +375,8 @@ t%[n]_alloc_q:
 
 
 ; Statically-allocated and initialized task strucs for the allocatable-tasks
-; queues.
-
-align 128, db 0
-
-; Task strucs are 128-bytes long, which preserves their 128-byte alignment when
-; they are contiguously located like below.
+; queues.  Task strucs are 128-bytes long, which preserves their 128-byte
+; alignment when they are contiguously located like below.
 
 %assign n 0
 %rep amount_threads
