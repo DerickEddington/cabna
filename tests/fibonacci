@@ -1,1 +1,81 @@
-TODO
+global main
+extern printf
+
+%include "cabna/iface"
+
+%assign count 36
+
+
+section .data
+  fmtstr: db `%lld\n`,0
+
+
+section .text
+
+proc main:  ; (done (fibonacci count))
+  jmp_ret alloc_task
+  mov qword [arg1_rdi + task.exec], done
+  mov qword [arg1_rdi + task.need], 1
+  mov rbx, arg1_rdi
+
+  jmp_ret alloc_task
+  mov qword [arg1_rdi + task.exec], fibonacci
+  mov qword [arg1_rdi + task.arg1], count
+  mov [arg1_rdi + task.rcvr], rbx
+  mov qword [arg1_rdi + task.ridx], 1
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+
+
+proc done:  ; Print value and exit program.
+  mov rsi, [cet_r14 + task.arg1]
+  mov edi, fmtstr
+  mov eax, 0
+  call printf
+  mov edi, 0
+  mov eax, 231  ; exit_group syscall number
+  syscall
+
+
+
+
+; (define (fibonacci n)
+;   (if (< 1 n)
+;     (+ (fibonacci (- n 1)) (fibonacci (- n 2)))
+;     n))
+
+proc fibonacci:
+  mov rbx, [cet_r14 + task.arg1]
+  test rbx, -2
+  jz .return
+
+  ; Reuse task struc for the tail-call.
+  mov qword [cet_r14 + task.exec], addition
+  mov qword [cet_r14 + task.need], 2
+
+  jmp_ret alloc_task
+  mov qword [arg1_rdi + task.exec], fibonacci
+  sub rbx, 1
+  mov qword [arg1_rdi + task.arg1], rbx
+  mov [arg1_rdi + task.rcvr], cet_r14
+  mov qword [arg1_rdi + task.ridx], 1
+  jmp_ret enqueue_task  ; arg1_rdi already set
+
+  jmp_ret alloc_task
+  mov qword [arg1_rdi + task.exec], fibonacci
+  sub rbx, 1
+  mov qword [arg1_rdi + task.arg1], rbx
+  mov [arg1_rdi + task.rcvr], cet_r14
+  mov qword [arg1_rdi + task.ridx], 2
+  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+
+.return:
+  mov arg1_rdi, rbx
+  jmp_ret_to supply_retval, free_pet__exec_avail
+
+
+
+
+proc addition:
+  mov arg1_rdi, [cet_r14 + task.arg1]
+  add arg1_rdi, [cet_r14 + task.arg2]
+  jmp_ret_to supply_retval, free_pet__exec_avail

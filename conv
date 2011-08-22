@@ -1,6 +1,6 @@
 ;--- User may modify these. ----------------------------------------------------
 
-%assign amount_threads 2
+%assign amount_threads 4
 
 ; The size of a thread's stack, except the initial thread's.
 %assign stack_size 4 * 4096
@@ -8,11 +8,11 @@
 ; The amount of pre-allocated free task strucs per thread.  Different programs
 ; will need different amounts depending on the program, and so possibly have to
 ; mmap, but we can provide enough here for many common programs.
-%assign statically_allocated_free_tasks 32
+%assign statically_allocated_free_tasks 64
 
 ; The amount of task strucs to allocate, per thread, per mmap when more are
 ; needed.
-%assign mmap_tasks 32
+%assign mmap_tasks 2048  ; 256 KB
 
 
 ;--- Internal. Do not modify. --------------------------------------------------

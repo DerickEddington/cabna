@@ -1,11 +1,11 @@
 Investigate multi-threading via print-outs.
 
+Implement statistics gathering, recording, and reporting.
+
 Investigate the performance of making threads spin-wait for their own exec queue
 instead of trying other threads'.  Maybe rearrange jumping so that pause only
 happens if spinning.  exec_avail still needs to try other threads' if its is
 empty.
-
-Investigate creating more than 2 threads.
 
 Determine the stack size given to the initial thread.  Decide what size to give
 other threads.  Minimum is 16384 (16 kb, 4 pages).
@@ -18,3 +18,32 @@ the parallel processing without having a compiler.  Useful parallel programs
 (including a compiler) can be interpreted.
 
 Investigate what NASM directives are neccessary to make a shared library.
+
+Investigate the performance difference of using common stack-based call/ret
+instead of jmp_ret for Cabna procedures.  If the difference is neglegible, it
+seems good to use Unix ABI calling convention so that other languages can call
+Cabna procedures, which could be useful to some users.
+
+Investigate supporting non-concurrent task execution, so that tasks can be
+called without enqueueing in the exec queue and so that they return to the
+caller, like common stack calling.  Is it even possible while also having the
+task-enqueueing and task-taking concurrency design?  User procedures would have
+to change so that it is dynamically parameterizable whether they enqueue tasks
+or directly call them, otherwise directly-called procedures won't be done until
+their enqueued sub-tasks are done, which won't happen until some thread(s)
+dequeue and completely execute the sub-tasks, which will block the
+direct-caller.  It's possible to have a register determine whether enqueue_task
+or exec_task_directly is used for sub-tasks, but is it possible to generally
+have a register determine whether a task continues to exec_avail or
+free_pet__exec_avail or return_to_caller?  Supporting this would require using
+call and ret and the stack, to allow nested direct procedure calls, otherwise
+ret_rsi will be destroyed by calls in procedures' dynamic extents.  Supporting
+this would, I think, require using a field of the currently executing task struc
+for the return value of the directly-called procedure, i.e. the CET is the
+receiver of the DCP so that the DCP can return its value in the same manner
+regardless of whether it's called directly or executed from the queue; but, for
+queued execution, when the CET is reused, it must be reused before the sub-tasks
+are setup, but for direct calling it must be reused after so that it can be used
+to receive the DCP's return value ???  ... However: maybe it's better for DCPs
+to mot be tasks nor use the task execution facilities, but instead use common
+stack-based call/ret.

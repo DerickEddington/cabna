@@ -115,9 +115,9 @@ proc alloc_task:
 
 
 proc supply_retval:
-  ; Return a value to a waiting receiver task, argument in arg1_rdi.  If the
-  ; receiver task gets its final value, enqueue the task for execution.  Return
-  ; to ret_rsi.
+  ; Return a value to the currently executing task's waiting receiver task,
+  ; argument in arg1_rdi.  If the receiver task gets its final value, enqueue
+  ; the task for execution.  Return to ret_rsi.
   ; Used registers: rax, rdx, rsi, rdi.
 
   ; No other threads will access our currently executing task struc, so we can
