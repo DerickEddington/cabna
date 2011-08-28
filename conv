@@ -1,6 +1,6 @@
 ;--- User may modify these. ----------------------------------------------------
 
-%assign amount_threads 4
+%assign amount_threads 64
 
 ; The size of a thread's stack, except the initial thread's.
 %assign stack_size 4 * 4096
@@ -8,15 +8,15 @@
 ; The amount of pre-allocated free task strucs per thread.  Different programs
 ; will need different amounts depending on the program, and so possibly have to
 ; mmap, but we can provide enough here for many common programs.
-%assign statically_allocated_free_tasks 64
+%assign statically_allocated_free_tasks 16
 
 ; The amount of task strucs to allocate, per thread, per mmap when more are
 ; needed.
 %assign mmap_tasks 2048  ; 256 KB
 
+%define statistics_collection
 
 ;--- Internal. Do not modify. --------------------------------------------------
-
 
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
@@ -125,6 +125,39 @@ struc queue
   .head: resq 1
   .tail: resq 1
 endstruc
+
+
+
+
+%ifdef statistics_collection
+
+struc stats
+  .execute_calls:  resq 1
+  .executed_mine:  resq 1
+  .enqueue_calls:  resq 1
+  .enqueued_mine:  resq 1
+  .allocated:      resq 1
+  .freed:          resq 1
+  .exclusion:      resq 1
+  .mmap:           resq 1
+endstruc
+
+%if stats_size > 128
+  %error "Stats size " stats_size " greater than 128."
+%endif
+
+%define t_stats  ts_stats + alloc_q_r15d - ts_alloc_qs
+
+%macro stat 1+
+  %1
+%endmacro
+
+%else
+
+%macro stat 1+
+%endmacro
+
+%endif
 
 
 

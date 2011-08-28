@@ -2,6 +2,9 @@ bits 64
 default rel
 
 
+%include "cabna/conv"
+
+
 global _start
 global alloc_task
 global enqueue_task
@@ -9,11 +12,13 @@ global supply_retval
 global exec_avail
 global free_pet__exec_avail
 
+%ifdef statistics_collection
+global print_stats
+extern printf
+%endif
+
 extern main
 extern bug
-
-
-%include "cabna/conv"
 
 
 ; It is assumed that all Cabna code and data is located in 32-bit address space,
@@ -45,6 +50,8 @@ proc alloc_task:
   ; queue, so concurrency-safety is not needed.
   ; Used registers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11.
 
+  stat add qword [t_stats + stats.allocated], 1
+
   mov arg1_rdi, [alloc_q_r15d + queue.head]
   test arg1_rdi, arg1_rdi
   unlikely jz .get_new_space
@@ -65,6 +72,8 @@ proc alloc_task:
   ; Get some more space from the OS, divide it into blocks of task strucs, link
   ; them together, and enqueue all-at-once.  The fields of the new strucs are
   ; null because mmap zeros, as needed for future operations.
+
+  stat add qword [t_stats + stats.mmap], 1
 
   ; Save registers.
   ;mov ?, r9
@@ -144,6 +153,8 @@ proc enqueue_task:
   ; thread's, argument in arg1_rdi, and return to ret_rsi.
   ; Used registers: rax, rdx, rsi, rdi.
 
+  stat add qword [t_stats + stats.enqueue_calls], 1
+
   mov rdx, exec_q_r15
   shr rdx, 32
 .try:
@@ -156,6 +167,8 @@ proc enqueue_task:
   ; Other threads cannot concurrently execute the rest of this procedure, for
   ; the same queue.  This is what enables the concurrency-safety.
 
+  stat add qword [ts_stats + edx - ts_exec_qs + stats.enqueued_mine], 1
+
   mov rax, [edx + queue.tail]
   test rax, rax
   jz .empty
@@ -167,6 +180,7 @@ proc enqueue_task:
   jmp_ind ret_rsi
 
 .another:
+  stat add qword [t_stats + stats.exclusion], 1
   ; Try to enqueue the task in another thread's queue.
   mov edx, [edx + queue.next]
   and edx, -2  ; Clear possibly-set lock bit.
@@ -186,6 +200,7 @@ proc free_pet__exec_avail:
   ; own private allocatable-tasks queue, so concurrency-safety is not needed.
   ; Used registers: rax, and those of exec_avail.
 
+  stat add qword [t_stats + stats.freed], 1
   mov rax, [alloc_q_r15d + queue.tail]
   test rax, rax
   unlikely jz .empty
@@ -193,7 +208,6 @@ proc free_pet__exec_avail:
 .done:
   mov [alloc_q_r15d + queue.tail], cet_r14
   jmp exec_avail
-
 .empty:
   mov [alloc_q_r15d + queue.head], cet_r14
   jmp .done
@@ -205,6 +219,8 @@ proc exec_avail:
   ; Dequeue the oldest task from the current thread's executable-tasks queue, or
   ; from another thread's, and execute the task with cet_r14 set to the task.
   ; Used registers: rax, rdx, r14
+
+  stat add qword [t_stats + stats.execute_calls], 1
 
   mov rdx, exec_q_r15
   shr rdx, 32
@@ -221,6 +237,7 @@ proc exec_avail:
   mov cet_r14, [edx + queue.head]
   test cet_r14, cet_r14
   jz .another_unlock
+  stat add qword [ts_stats + edx - ts_exec_qs + stats.executed_mine], 1
   ; The next becomes the head, which might be null.
   mov rax, [cet_r14 + task.next]
   mov [edx + queue.head], rax
@@ -237,7 +254,10 @@ proc exec_avail:
 .another_unlock:
   ; Unlock the empty queue.
   and dword [edx + queue.next], -2  ; Clear lock bit.
+  stat jmp .no_stat
 .another:
+  stat add qword [t_stats + stats.exclusion], 1
+stat .no_stat:
   ; Try to take a task from another thread.
   mov edx, [edx + queue.next]
   and edx, -2  ; Clear possibly-set lock bit.
@@ -316,6 +336,138 @@ proc _start:
 .clone_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
   jmp bug
+
+
+
+
+%ifdef statistics_collection
+
+proc print_stats:
+  ; Print collected statistics for each thread, and print the totals of all
+  ; threads.  Called directly via call not via exec_avail, so the things having
+  ; statistics collected are not used to execute it.
+
+  ; Temporary struc for the totals of all threads.
+  sub rsp, stats_size
+  mov qword [rsp + stats.execute_calls], 0
+  mov qword [rsp + stats.executed_mine], 0
+  mov qword [rsp + stats.enqueue_calls], 0
+  mov qword [rsp + stats.enqueued_mine], 0
+  mov qword [rsp + stats.allocated], 0
+  mov qword [rsp + stats.freed], 0
+  mov qword [rsp + stats.exclusion], 0
+  mov qword [rsp + stats.mmap], 0
+
+  mov ebx, amount_threads - 1
+.loop:
+  mov esi, ebx
+  mov edi, stats_tid_fmtstr
+  mov eax, 0
+  call printf
+  ; Multiply thread ID by 128: the offset of the thread's stats address.
+  shl ebx, 7
+
+  mov rsi, [ts_stats + ebx + stats.execute_calls]
+  add [rsp + stats.execute_calls], rsi
+  mov edi, stats_execute_calls_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.executed_mine]
+  add [rsp + stats.executed_mine], rsi
+  mov edi, stats_executed_mine_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.enqueue_calls]
+  add [rsp + stats.enqueue_calls], rsi
+  mov edi, stats_enqueue_calls_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.enqueued_mine]
+  add [rsp + stats.enqueued_mine], rsi
+  mov edi, stats_enqueued_mine_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.allocated]
+  add [rsp + stats.allocated], rsi
+  mov edi, stats_allocated_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.freed]
+  add [rsp + stats.freed], rsi
+  mov edi, stats_freed_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.exclusion]
+  add [rsp + stats.exclusion], rsi
+  mov edi, stats_exclusion_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.mmap]
+  add [rsp + stats.mmap], rsi
+  mov edi, stats_mmap_fmtstr
+  mov eax, 0
+  call printf
+
+  shr ebx, 7
+  sub ebx, 1
+  jnc .loop
+
+  mov esi, amount_threads
+  mov edi, stats_total_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.execute_calls]
+  mov edi, stats_execute_calls_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.executed_mine]
+  mov edi, stats_executed_mine_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.enqueue_calls]
+  mov edi, stats_enqueue_calls_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.enqueued_mine]
+  mov edi, stats_enqueued_mine_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.allocated]
+  mov edi, stats_allocated_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.freed]
+  mov edi, stats_freed_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.exclusion]
+  mov edi, stats_exclusion_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.mmap]
+  mov edi, stats_mmap_fmtstr
+  mov eax, 0
+  call printf
+
+  add rsp, stats_size
+  ret
+
+%endif
 
 
 
@@ -456,3 +608,40 @@ t%[n]_alloc_q_tail:
 
 %assign n  n + 1
 %endrep
+
+
+
+
+%ifdef statistics_collection
+
+ts_stats:
+
+%rep amount_threads
+
+  istruc stats
+    at stats.execute_calls,  dq 0
+    at stats.executed_mine,  dq 0
+    at stats.enqueue_calls,  dq 0
+    at stats.enqueued_mine,  dq 0
+    at stats.allocated,      dq 0
+    at stats.freed,          dq 0
+    at stats.exclusion,      dq 0
+    at stats.mmap,           dq 0
+  iend
+
+align 128, db 0  ; Necessary because the exec and alloc queues are used to find
+                 ; each thread's stats struc.
+%endrep
+
+stats_tid_fmtstr:            db `Thread %lu:\n`,0
+stats_execute_calls_fmtstr:  db `  execute calls: %llu\n`,0
+stats_executed_mine_fmtstr:  db `  executed mine: %llu\n`,0
+stats_enqueue_calls_fmtstr:  db `  enqueue calls: %llu\n`,0
+stats_enqueued_mine_fmtstr:  db `  enqueued mine: %llu\n`,0
+stats_allocated_fmtstr:      db `  allocated:     %llu\n`,0
+stats_freed_fmtstr:          db `  freed:         %llu\n`,0
+stats_exclusion_fmtstr:      db `  exclusions:    %llu\n`,0
+stats_mmap_fmtstr:           db `  mmaps:         %llu\n`,0
+stats_total_fmtstr:          db `Totals of %lu threads:\n`,0
+
+%endif

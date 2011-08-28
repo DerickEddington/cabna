@@ -3,7 +3,7 @@ extern printf
 
 %include "cabna/iface"
 
-%assign count 36
+%assign count 37
 
 
 section .data
@@ -31,6 +31,7 @@ proc done:  ; Print value and exit program.
   mov edi, fmtstr
   mov eax, 0
   call printf
+  stat call print_stats
   mov edi, 0
   mov eax, 231  ; exit_group syscall number
   syscall

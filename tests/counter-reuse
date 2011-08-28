@@ -2,7 +2,7 @@ global main
 
 %include "cabna/iface"
 
-%assign count 200_000_000
+%assign count 100_000_000
 
 
 section .text
@@ -23,6 +23,7 @@ proc main:  ; (done (a n))
 
 
 proc done:  ; Exit program.
+  stat call print_stats
   mov rdi, [cet_r14 + task.arg1]
   mov eax, 231  ; exit_group syscall number
   syscall
