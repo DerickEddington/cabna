@@ -1,13 +1,9 @@
-Investigate why increasing the amount of threads well above the number of
-processors results in less memory usage and faster execution.
-
-Investigate the performance of making task memory management be such that each
-thread has a private queue of tasks, not needing concurrency safety, but when
-queue size reaches a limit, freed tasks are put in a shared concurrency-safe
-queue, and when queue is empty, tasks are taken from the shared queue, and a
-thread that finds the shared queue empty adds more via mmap.  This way, memory
-is shared by all threads but locking/exclusion is avoiding much (most?) of the
-time.
+Investigate why new memory management is still such that increasing the amount
+of threads well above the number of processors results in much less memory
+usage.  This results in much slower execution, and it seems that the integral of
+memory vs time is the same regardless of the amount of threads, i.e. less
+threads executes faster, consuming strucs faster, but that should also result in
+freeing strucs faster.
 
 Rename conv file to ?
 

@@ -1,18 +1,26 @@
 global main
 extern printf
+extern dprintf
 
 %include "cabna/iface"
 
-%assign count 37
+%assign count 35
 
 
 section .data
-  fmtstr: db `%lld\n`,0
+  fmtstr1: db "fibonacci(%lu) = ",0
+  fmtstr2: db `%llu\n`,0
 
 
 section .text
 
 proc main:  ; (done (fibonacci count))
+  mov edx, count
+  mov esi, fmtstr1
+  mov edi, 2
+  mov eax, 0
+  call dprintf  ; Use dprintf to stderr because it flushes immediately.
+
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], done
   mov qword [arg1_rdi + task.need], 1
@@ -28,7 +36,7 @@ proc main:  ; (done (fibonacci count))
 
 proc done:  ; Print value and exit program.
   mov rsi, [cet_r14 + task.arg1]
-  mov edi, fmtstr
+  mov edi, fmtstr2
   mov eax, 0
   call printf
   stat call print_stats

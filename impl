@@ -45,33 +45,81 @@ section .text
 
 proc alloc_task:
   ; Dequeue a free task struc, from the current thread's allocatable-tasks
-  ; queue, or allocate more memory from the OS, and return to ret_rsi with task
-  ; pointer in arg1_rdi.  Each thread has its own private allocatable-tasks
-  ; queue, so concurrency-safety is not needed.
+  ; queue, or from the shared queue, or allocate more memory from the OS, and
+  ; return to ret_rsi with task pointer in arg1_rdi.  Each thread has its own
+  ; private allocatable-tasks queue, so if that's used, concurrency-safety is
+  ; not needed.  If the shared queue is used, concurrencry-safety is needed.
   ; Used registers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11.
 
   stat add qword [t_stats + stats.allocated], 1
 
   mov arg1_rdi, [alloc_q_r15d + queue.head]
   test arg1_rdi, arg1_rdi
-  unlikely jz .get_new_space
-  ; The next becomes the head, which might be null.
+  unlikely jz .from_shared
+
+  sub dword [alloc_q_r15d + queue.size], 1  ; 32-bit alright.
+.from_private:
+  ; The next, which might be null, becomes the head.
   mov rax, [arg1_rdi + task.next]
   mov [alloc_q_r15d + queue.head], rax
   test rax, rax
   unlikely jz .also_tail
   mov qword [arg1_rdi + task.next], 0
   jmp_ind ret_rsi
-
 .also_tail:
   ; If the next is null, our struc was also the tail, so nullify queue's tail.
   mov [alloc_q_r15d + queue.tail], rax
   jmp_ind ret_rsi
 
+.from_shared_spin:
+  pause
+  stat add qword [t_stats + stats.exclusion], 1
+.from_shared:
+  bt dword [s_alloc_q + queue.next], 0
+  jc .from_shared_spin  ; Another thread already has it locked.
+  ; Try to lock the queue for our use.
+  lock bts dword [s_alloc_q + queue.next], 0
+  jc .from_shared_spin  ; Another thread just locked it.
+  ; Other threads cannot concurrently execute the rest of this procedure.  This
+  ; is what enables the concurrency-safety.
+  mov rax, [s_alloc_q + queue.head]
+  test rax, rax
+  unlikely jz .get_new_space
+
+.have_space:
+  mov arg1_rdi, rax  ; Head is return value.
+  mov ecx, private_free_tasks_max  ; 32-bit alright.
+.take_shared:
+  mov rdx, rax
+  mov rax, [rax + task.next]
+  test rax, rax
+  unlikely jz .done_shared_tail
+  sub ecx, 1
+  jnz .take_shared
+  jmp .done_shared
+.done_shared_tail:
+  sub ecx, 1
+  ; If the untaken is null, we also took the tail, so nullify queue's tail.
+  mov [s_alloc_q + queue.tail], rax
+.done_shared:
+  ; The untaken, which might be null, becomes the head.
+  mov [s_alloc_q + queue.head], rax
+  ; Unlock the shared queue.
+  and dword [s_alloc_q + queue.next], -2  ; Clear lock bit.
+  ; Enqueue-at-once in private queue.
+  ;;;mov [alloc_q_r15d + queue.head], arg1_rdi  ; Not necessary.
+  mov qword [rdx + task.next], 0
+  mov [alloc_q_r15d + queue.tail], rdx
+  mov eax, private_free_tasks_max - 1  ; 32-bit alright.
+  sub eax, ecx
+  mov [alloc_q_r15d + queue.size], eax  ; 1 less because head is returned.
+  jmp .from_private
+
 .get_new_space:
   ; Get some more space from the OS, divide it into blocks of task strucs, link
-  ; them together, and enqueue all-at-once.  The fields of the new strucs are
-  ; null because mmap zeros, as needed for future operations.
+  ; them together, enqueue-at-once in the shared queue, and jump to .have_space.
+  ; The fields of the new strucs are null because mmap zeros, as needed for
+  ; future operations.
 
   stat add qword [t_stats + stats.mmap], 1
 
@@ -80,7 +128,7 @@ proc alloc_task:
   ;mov ?, r8
   ;mov ?, r10
   ;mov ?, rdx
-  mov [alloc_q_r15d + queue.head], ret_rsi  ; Just a temporary location.
+  mov [s_alloc_q + queue.head], ret_rsi  ; Just a temporary location.
   ;mov ?, rdi
   ;mov ?, rax  ; syscall destroys
   ;mov ?, rcx  ; syscall destroys
@@ -98,23 +146,20 @@ proc alloc_task:
   cmp rax, -4096
   ja .mmap_failed
 
-  ; Reserve first block for return value.
-  mov arg1_rdi, rax
   ; Divide remaining space into task strucs, and link together.
-  add rax, rsi  ; End of the space.
-  sub rax, task_size  ; Tail struc is the last block.
-  mov [alloc_q_r15d + queue.tail], rax
+  add rsi, rax  ; End of the space.
+  sub rsi, task_size  ; Tail struc is the last block.
+  mov [s_alloc_q + queue.tail], rsi
+  xor edx, edx
 .divide_and_link:
-  mov rdx, rax
-  sub rax, task_size
-  cmp rax, arg1_rdi
-  jbe .done
-  mov [rax + task.next], rdx
-  jmp .divide_and_link
-.done:
-  mov ret_rsi, [alloc_q_r15d + queue.head]  ; Restore saved.
-  mov [alloc_q_r15d + queue.head], rdx
-  jmp_ind ret_rsi  ; Return first block of new space.
+  mov [rsi + task.next], rdx
+  mov rdx, rsi
+  sub rsi, task_size
+  cmp rsi, rax
+  jae .divide_and_link
+  mov ret_rsi, [s_alloc_q + queue.head]  ; Restore saved.
+  mov [s_alloc_q + queue.head], rax
+  jmp .have_space
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
@@ -167,7 +212,16 @@ proc enqueue_task:
   ; Other threads cannot concurrently execute the rest of this procedure, for
   ; the same queue.  This is what enables the concurrency-safety.
 
-  stat add qword [ts_stats + edx - ts_exec_qs + stats.enqueued_mine], 1
+%ifdef statistics_collection
+  add qword [ts_stats + edx - ts_exec_qs + stats.enqueued_mine], 1
+  mov rax, [edx + queue.size]
+  add rax, 1
+  mov [edx + queue.size], rax
+  cmp rax, [ts_stats + edx - ts_exec_qs + stats.exec_q_max]
+  jbe .not_max
+  mov [ts_stats + edx - ts_exec_qs + stats.exec_q_max], rax
+.not_max:
+%endif
 
   mov rax, [edx + queue.tail]
   test rax, rax
@@ -196,11 +250,20 @@ proc enqueue_task:
 
 proc free_pet__exec_avail:
   ; Free the previously executing task by enqueueing it in the current thread's
-  ; allocatable-tasks queue, and continue into exec_avail.  Each thread has its
-  ; own private allocatable-tasks queue, so concurrency-safety is not needed.
+  ; allocatable-tasks queue, or in the shared queue if the thread's queue
+  ; reached the max, and continue into exec_avail.  Each thread has its own
+  ; private allocatable-tasks queue, so if that's used, concurrency-safety is
+  ; not needed.  If the shared queue is used, concurrencry-safety is needed.
   ; Used registers: rax, and those of exec_avail.
 
   stat add qword [t_stats + stats.freed], 1
+
+  mov eax, [alloc_q_r15d + queue.size]  ; 32-bit alright.
+  cmp eax, private_free_tasks_max
+  jae .in_shared
+
+  add eax, 1
+  mov [alloc_q_r15d + queue.size], eax  ; 32-bit alright.
   mov rax, [alloc_q_r15d + queue.tail]
   test rax, rax
   unlikely jz .empty
@@ -211,6 +274,30 @@ proc free_pet__exec_avail:
 .empty:
   mov [alloc_q_r15d + queue.head], cet_r14
   jmp .done
+
+.in_shared_spin:
+  pause
+  stat add qword [t_stats + stats.exclusion], 1
+.in_shared:
+  bt dword [s_alloc_q + queue.next], 0
+  jc .in_shared_spin  ; Another thread already has it locked.
+  ; Try to lock the queue for our use.
+  lock bts dword [s_alloc_q + queue.next], 0
+  jc .in_shared_spin  ; Another thread just locked it.
+  ; Other threads cannot concurrently execute the rest of this procedure.  This
+  ; is what enables the concurrency-safety.
+  mov rax, [s_alloc_q + queue.tail]
+  test rax, rax
+  unlikely jz .empty_shared
+  mov [rax + task.next], cet_r14
+.done_shared:
+  mov [s_alloc_q + queue.tail], cet_r14
+  ; Unlock the shared queue.
+  and dword [s_alloc_q + queue.next], -2  ; Clear lock bit.
+  jmp exec_avail
+.empty_shared:
+  mov [s_alloc_q + queue.head], cet_r14
+  jmp .done_shared
 
 
 
@@ -237,8 +324,9 @@ proc exec_avail:
   mov cet_r14, [edx + queue.head]
   test cet_r14, cet_r14
   jz .another_unlock
+  stat sub qword [edx + queue.size], 1
   stat add qword [ts_stats + edx - ts_exec_qs + stats.executed_mine], 1
-  ; The next becomes the head, which might be null.
+  ; The next, which might be null, becomes the head.
   mov rax, [cet_r14 + task.next]
   mov [edx + queue.head], rax
   test rax, rax
@@ -349,6 +437,7 @@ proc print_stats:
 
   ; Temporary struc for the totals of all threads.
   sub rsp, stats_size
+  ;;; [rsp + stats.exec_q_max] not totaled.
   mov qword [rsp + stats.execute_calls], 0
   mov qword [rsp + stats.executed_mine], 0
   mov qword [rsp + stats.enqueue_calls], 0
@@ -366,6 +455,11 @@ proc print_stats:
   call printf
   ; Multiply thread ID by 128: the offset of the thread's stats address.
   shl ebx, 7
+
+  mov rsi, [ts_stats + ebx + stats.exec_q_max]
+  mov edi, stats_exec_q_max_fmtstr
+  mov eax, 0
+  call printf
 
   mov rsi, [ts_stats + ebx + stats.execute_calls]
   add [rsp + stats.execute_calls], rsi
@@ -412,6 +506,15 @@ proc print_stats:
   mov rsi, [ts_stats + ebx + stats.mmap]
   add [rsp + stats.mmap], rsi
   mov edi, stats_mmap_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rax, mmap_tasks * task_size / 1024
+  mov rsi, [ts_stats + ebx + stats.mmap]
+  mul rsi
+  mov rsi, rdx
+  mov rdx, rax
+  mov edi, stats_mmap_kb_fmtstr
   mov eax, 0
   call printf
 
@@ -464,6 +567,15 @@ proc print_stats:
   mov eax, 0
   call printf
 
+  mov rax, mmap_tasks * task_size / 1024
+  mov rsi, [rsp + stats.mmap]
+  mul rsi
+  mov rsi, rdx
+  mov rdx, rax
+  mov edi, stats_mmap_kb_fmtstr
+  mov eax, 0
+  call printf
+
   add rsp, stats_size
   ret
 
@@ -494,6 +606,7 @@ t%[n]_exec_q:
     at queue.next, dq t%[n]_exec_q  ; Lock bit not set.
     at queue.head, dq 0
     at queue.tail, dq 0
+    at queue.size, dq 0
   iend
 
 align 128, db 0
@@ -503,7 +616,23 @@ align 128, db 0
 
 
 
-; Threads' allocatable-tasks queues.
+; Shared allocatable-tasks queue.
+
+s_alloc_q:
+
+  istruc queue
+    at queue.next, dq 0  ; Only used for lock bit.
+    at queue.head, dq 0
+    at queue.tail, dq 0
+    at queue.size, dq 0  ; Not used.
+  iend
+
+align 128, db 0
+
+
+
+
+; Threads' private allocatable-tasks queues.
 
 ts_alloc_qs:
 
@@ -513,9 +642,10 @@ ts_alloc_qs:
 t%[n]_alloc_q:
 
   istruc queue
-    at queue.next, dq 0  ; Never used.
+    at queue.next, dq 0  ; Not used.
     at queue.head, dq t%[n]_alloc_q_head
     at queue.tail, dq t%[n]_alloc_q_tail
+    at queue.size, dq statically_allocated_free_tasks
   iend
 
 align 128, db 0
@@ -619,6 +749,7 @@ ts_stats:
 %rep amount_threads
 
   istruc stats
+    at stats.exec_q_max,     dq 0
     at stats.execute_calls,  dq 0
     at stats.executed_mine,  dq 0
     at stats.enqueue_calls,  dq 0
@@ -634,6 +765,7 @@ align 128, db 0  ; Necessary because the exec and alloc queues are used to find
 %endrep
 
 stats_tid_fmtstr:            db `Thread %lu:\n`,0
+stats_exec_q_max_fmtstr:     db `  exec_q max:    %llu\n`,0
 stats_execute_calls_fmtstr:  db `  execute calls: %llu\n`,0
 stats_executed_mine_fmtstr:  db `  executed mine: %llu\n`,0
 stats_enqueue_calls_fmtstr:  db `  enqueue calls: %llu\n`,0
@@ -642,6 +774,7 @@ stats_allocated_fmtstr:      db `  allocated:     %llu\n`,0
 stats_freed_fmtstr:          db `  freed:         %llu\n`,0
 stats_exclusion_fmtstr:      db `  exclusions:    %llu\n`,0
 stats_mmap_fmtstr:           db `  mmaps:         %llu\n`,0
+stats_mmap_kb_fmtstr:        db `  KB mmaped:     %llu,%llu\n`,0
 stats_total_fmtstr:          db `Totals of %lu threads:\n`,0
 
 %endif
