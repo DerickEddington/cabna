@@ -3,17 +3,15 @@
 %assign amount_threads 4
 
 ; The size of a thread's stack, except the initial thread's.
-%assign stack_size 4 * 4096
+%assign call_stack_size 4 * 4096
 
-; The amount of pre-allocated free task strucs per thread.  Different programs
-; will need different amounts depending on the program, and so possibly have to
-; mmap, but we can provide enough here for many common programs.
-%assign statically_allocated_free_tasks 16
+; The amount of pre-allocated free task strucs per thread.
+%assign statically_allocated_free_tasks 64
 
 ; The maximum amount, per thread, of free task strucs that can be in a thread's
-; allocatable-tasks queue.  When this limit is reached, freed tasks are enqueued
-; in the shared allocatable-tasks queue.
-%assign private_free_tasks_max 1024  ; 128 KB
+; allocatable-tasks stack.  When this limit is reached, freed tasks are pushed
+; in the shared allocatable-tasks stack.
+%assign private_free_tasks_max 4096  ; 512 KB
 
 %define statistics_collection
 
@@ -24,8 +22,8 @@
 
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
-%define exec_q_r15    r15   ; A thread's executable-tasks queue (upper 32 bits).
-%define alloc_q_r15d  r15d  ; A thread's allocatable-tasks queue (lower 32 bits).
+%define exec_s_r15    r15   ; A thread's executable-tasks stack (upper 32 bits).
+%define alloc_s_r15d  r15d  ; A thread's allocatable-tasks stack (lower 32 bits).
 %define cet_r14       r14   ; A thread's currently executing task.
 
 
@@ -72,7 +70,7 @@
 
 
 ; Instances of all the below struc types must be aligned at 8-byte boundary, so
-; that loads and stores of the fields are atomic.  Instances of task and queue
+; that loads and stores of the fields are atomic.  Instances of task and stack
 ; strucs must be aligned at 128-byte boundary, for processor bus locking
 ; efficiency.  Those statically allocated in the .data section are properly
 ; aligned, because the section is specified to be aligned at 128-byte and the
@@ -116,27 +114,27 @@ endstruc
 %endif
 
 
-; For executable-tasks queues, a queue struc's .next pointer is not changed once
-; initialized, which allows concurrent reading of it without locking.  The
-; lowest bit of the .next field is the lock variable for accessing the .head or
-; .tail fields, and this is alright because all queue strucs are aligned such
-; that pointers never need the lowest bit.  For thread-private allocatable-tasks
-; queues, concurrent access doesn't occur, the .next field is never used, and
-; there is no lock for accessing the .head or .tail fields.  For the shared
-; allocatable-tasks queue, concurrent access does occur, and the .next field is
-; used only for the lock bit.  The size field is used only for thread-private
-; allocatable-tasks queues, but if statistics collection is enabled then the
-; size field is used for the executable-tasks queues also.
+; For executable-tasks stacks, a struc's .next field is not changed once
+; initialized, which allows concurrent reading of it without locking.  For
+; thread-private allocatable-tasks stacks, concurrent access doesn't occur, and
+; the .next field is never used.  For the shared allocatable-tasks stack,
+; concurrent access does occur, and the lowest bit of the .next field is the
+; lock variable, and this is alright because the shared stack doesn't keep a
+; pointer in .next.  The .size field is used only for thread-private
+; allocatable-tasks stacks, but if statistics collection is enabled then the
+; field is used for the executable-tasks stacks also.  The .need field is used
+; only for executable-tasks stacks, with a special protocol for concurrent
+; access.
 
-struc queue
-  .next: resq 1
+struc stack
   .head: resq 1
-  .tail: resq 1
+  .next: resq 1
   .size: resq 1
+  .need: resq 1
 endstruc
 
-%if queue_size > 128
-  %error "Queue size " queue_size " greater than 128."
+%if stack_size > 128
+  %error "Stack size " stack_size " greater than 128."
 %endif
 
 
@@ -145,11 +143,12 @@ endstruc
 %ifdef statistics_collection
 
 struc stats
-  .exec_q_max:     resq 1
+  .exec_s_max:     resq 1
   .execute_calls:  resq 1
   .executed_mine:  resq 1
-  .enqueue_calls:  resq 1
-  .enqueued_mine:  resq 1
+  .wait            resq 1
+  .sched_calls:    resq 1
+  .sched_mine:     resq 1
   .allocated:      resq 1
   .freed:          resq 1
   .exclusion:      resq 1
@@ -160,7 +159,7 @@ endstruc
   %error "Stats size " stats_size " greater than 128."
 %endif
 
-%define t_stats  ts_stats + alloc_q_r15d - ts_alloc_qs
+%define t_stats  ts_stats + alloc_s_r15d - ts_alloc_ss
 
 %macro stat 1+
   %1
@@ -180,12 +179,12 @@ endstruc
   %fatal "amount_threads, " amount_threads ", less than 1."
 %endif
 
-%if stack_size < 16 * 1024
-  %error "stack_size, " stack_size ", less than 16 KB."
+%if call_stack_size < 16 * 1024
+  %error "call_stack_size, " call_stack_size ", less than 16 KB."
 %endif
 
-%if stack_size % 4096 != 0
-  %warning "stack_size, " stack_size ", not a multiple of page size."
+%if call_stack_size % 4096 != 0
+  %warning "call_stack_size, " call_stack_size ", not a multiple of page size."
 %endif
 
 %if statically_allocated_free_tasks < 2

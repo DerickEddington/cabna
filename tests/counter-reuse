@@ -19,7 +19,7 @@ proc main:  ; (done (a n))
   mov qword [arg1_rdi + task.arg1], count
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
 
 
 proc done:  ; Exit program.
@@ -35,7 +35,7 @@ proc a:
   mov arg1_rdi, cet_r14
   sub qword [arg1_rdi + task.arg1], 1
   mov qword [arg1_rdi + task.exec], b
-  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
 
 
 
@@ -44,7 +44,7 @@ proc b:
   mov arg1_rdi, cet_r14
   sub qword [arg1_rdi + task.arg1], 2
   mov qword [arg1_rdi + task.exec], c
-  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
 
 
 
@@ -57,4 +57,4 @@ proc c:
 
   mov arg1_rdi, cet_r14
   mov qword [arg1_rdi + task.exec], a
-  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set

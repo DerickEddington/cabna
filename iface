@@ -1,7 +1,7 @@
 %include "cabna/conv"
 
 extern alloc_task
-extern enqueue_task
+extern sched_task
 extern supply_retval
 extern exec_avail
 extern free_pet__exec_avail

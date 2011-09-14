@@ -4,7 +4,7 @@ extern dprintf
 
 %include "cabna/iface"
 
-%assign count 35
+%assign count 39
 
 
 section .data
@@ -31,7 +31,7 @@ proc main:  ; (done (fibonacci count))
   mov qword [arg1_rdi + task.arg1], count
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
 
 
 proc done:  ; Print value and exit program.
@@ -67,7 +67,7 @@ proc fibonacci:
   mov qword [arg1_rdi + task.arg1], rbx
   mov [arg1_rdi + task.rcvr], cet_r14
   mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret enqueue_task  ; arg1_rdi already set
+  jmp_ret sched_task  ; arg1_rdi already set
 
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], fibonacci
@@ -75,7 +75,7 @@ proc fibonacci:
   mov qword [arg1_rdi + task.arg1], rbx
   mov [arg1_rdi + task.rcvr], cet_r14
   mov qword [arg1_rdi + task.ridx], 2
-  jmp_ret_to enqueue_task, exec_avail  ; arg1_rdi already set
+  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
 
 .return:
   mov arg1_rdi, rbx

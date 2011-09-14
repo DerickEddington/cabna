@@ -1,25 +1,23 @@
-Investigate why new memory management is still such that increasing the amount
-of threads well above the number of processors results in much less memory
-usage.  This results in much slower execution, and it seems that the integral of
-memory vs time is the same regardless of the amount of threads, i.e. less
-threads executes faster, consuming strucs faster, but that should also result in
-freeing strucs faster.
+Investigate redesigning memory management to avoid mutex exclusion.  Current
+design causes a lot of exclusion and bus-locking which makes multiple threads
+slower than a single thread.  Perhaps the simple design of threads having
+entirely independent pools is good?  Or can that result in unbalanced pooling
+and therefore unnecessary mmaping?
+
+Investigate if there's a point where multi-processor Cabna fibonacci is faster
+than single-processor Ikarus fibonacci.
+
+Is "false sharing" happening?  "Place each synchronization variable alone,
+separated by 128 bytes or in a separate cache line."  Locked variables should
+not be with any other fields in their 128-byte block?  I think this means struc
+sizes need to increase.
+
+
 
 Rename conv file to ?
 
-Investigate the performance of making threads spin-wait for their own exec queue
-instead of trying other threads'.  Maybe rearrange jumping so that pause only
-happens if spinning.  exec_avail still needs to try other threads' if its is
-empty.
-
-Investigate the performance of making threads indicate when they need a task to
-execute, and making enqueue_task check if its thread's exec queue already has a
-task and another thread needs a task and if so giving a task to the needy
-thread.  Should the thread's oldest enqueued task should be given to the other
-thread instead of the newest enqueued task?  This changes the design from
-task-taking to task-giving.  What are the implications?  This relies on
-enqueue_task being used in order for tasks to be given to another thread, and if
-that doesn't happen, available threads won't be working.
+Is (un)likely actually a good idea?  Maybe not portable to other processors.
+Seems to screw up objdump disassembly.  Review performance difference again.
 
 Determine the stack size given to the initial thread.  Decide what size to give
 other threads.  Minimum is 16384 (16 kb, 4 pages).
@@ -63,3 +61,5 @@ are setup, but for direct calling it must be reused after so that it can be used
 to receive the DCP's return value ???  ... However: maybe it's better for DCPs
 to mot be tasks nor use the task execution facilities, but instead use common
 stack-based call/ret.
+
+Analyze object files / assembly / machine code again.
