@@ -4,11 +4,11 @@ extern dprintf
 
 %include "cabna/iface"
 
-%assign count 39
+%assign count 36
 
 
 section .data
-  fmtstr1: db "fibonacci(%lu) = ",0
+  fmtstr1: db `fibonacci(%lu) = `,0
   fmtstr2: db `%llu\n`,0
 
 
@@ -17,7 +17,7 @@ section .text
 proc main:  ; (done (fibonacci count))
   mov edx, count
   mov esi, fmtstr1
-  mov edi, 2
+  mov edi, 2  ; stderr
   mov eax, 0
   call dprintf  ; Use dprintf to stderr because it flushes immediately.
 
@@ -54,6 +54,15 @@ proc done:  ; Print value and exit program.
 
 proc fibonacci:
   mov rbx, [cet_r14 + task.arg1]
+
+; %ifdef statistics_collection
+;   mov rdx, rbx
+;   mov esi, fmtstr3
+;   mov edi, 2  ; stderr
+;   mov eax, 0
+;   call dprintf  ; Use dprintf to stderr because it flushes immediately.
+; %endif
+
   test rbx, -2
   jz .return
 

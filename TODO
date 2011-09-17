@@ -1,8 +1,14 @@
-Investigate redesigning memory management to avoid mutex exclusion.  Current
-design causes a lot of exclusion and bus-locking which makes multiple threads
-slower than a single thread.  Perhaps the simple design of threads having
-entirely independent pools is good?  Or can that result in unbalanced pooling
-and therefore unnecessary mmaping?
+Investigate redesigning memory management to return freed strucs to their owner.
+Otherwise, as currently, a thread can end up with way more free strucs than it
+needs, which deprives other threads causing them to mmap way too much.  Try to
+make this mutex-free.  Each thread has references to stacks for each other
+thread to give freed strucs belonging to the thread.
+
+Investigate redesigning task giving so that there's only one global field that
+indicates what thread needs a task.  Needy threads compete for setting the field
+to indicate themselves.  Each thread has a field for receiving a gifted task.
+After a thread sets the needy field, it waits for a pointer to appear in its
+gift field.
 
 Investigate if there's a point where multi-processor Cabna fibonacci is faster
 than single-processor Ikarus fibonacci.

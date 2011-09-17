@@ -1,6 +1,6 @@
 ;--- User may modify these. ----------------------------------------------------
 
-%assign amount_threads 4
+%assign amount_threads 2
 
 ; The size of a thread's stack, except the initial thread's.
 %assign call_stack_size 4 * 4096
@@ -8,17 +8,13 @@
 ; The amount of pre-allocated free task strucs per thread.
 %assign statically_allocated_free_tasks 64
 
-; The maximum amount, per thread, of free task strucs that can be in a thread's
-; allocatable-tasks stack.  When this limit is reached, freed tasks are pushed
-; in the shared allocatable-tasks stack.
-%assign private_free_tasks_max 4096  ; 512 KB
+; The amount of task strucs to allocate per mmap, per thread, when more are
+; needed.
+%assign mmap_tasks 2048  ; 256 KB
 
 %define statistics_collection
 
 ;--- Internal. Do not modify. --------------------------------------------------
-
-; The amount of task strucs to allocate per mmap when more are needed.
-%assign mmap_tasks  amount_threads * 2 * private_free_tasks_max
 
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
@@ -116,20 +112,13 @@ endstruc
 
 ; For executable-tasks stacks, a struc's .next field is not changed once
 ; initialized, which allows concurrent reading of it without locking.  For
-; thread-private allocatable-tasks stacks, concurrent access doesn't occur, and
-; the .next field is never used.  For the shared allocatable-tasks stack,
-; concurrent access does occur, and the lowest bit of the .next field is the
-; lock variable, and this is alright because the shared stack doesn't keep a
-; pointer in .next.  The .size field is used only for thread-private
-; allocatable-tasks stacks, but if statistics collection is enabled then the
-; field is used for the executable-tasks stacks also.  The .need field is used
-; only for executable-tasks stacks, with a special protocol for concurrent
-; access.
+; allocatable-tasks stacks, concurrent access doesn't occur, and the .next field
+; is never used.  The .need field is used only for executable-tasks stacks, with
+; a special protocol for concurrent access.
 
 struc stack
   .head: resq 1
   .next: resq 1
-  .size: resq 1
   .need: resq 1
 endstruc
 
@@ -144,14 +133,18 @@ endstruc
 
 struc stats
   .exec_s_max:     resq 1
+  .exec_s_size:    resq 1
   .execute_calls:  resq 1
   .executed_mine:  resq 1
   .wait            resq 1
   .sched_calls:    resq 1
   .sched_mine:     resq 1
+  .alloc_s_max:    resq 1
+  .alloc_s_size:   resq 1
   .allocated:      resq 1
   .freed:          resq 1
-  .exclusion:      resq 1
+  .used_max:       resq 1  ; Only thread-0's used.
+  .in_use:         resq 1  ; Only thread-0's used.
   .mmap:           resq 1
 endstruc
 
@@ -160,6 +153,7 @@ endstruc
 %endif
 
 %define t_stats  ts_stats + alloc_s_r15d - ts_alloc_ss
+%define t0_stats ts_stats
 
 %macro stat 1+
   %1
@@ -189,14 +183,6 @@ endstruc
 
 %if statically_allocated_free_tasks < 2
   %fatal "statically_allocated_free_tasks, " statically_allocated_free_tasks ", less than 2."
-%endif
-
-%if statically_allocated_free_tasks > private_free_tasks_max
-  %error "statically_allocated_free_tasks greater than private_free_tasks_max."
-%endif
-
-%if private_free_tasks_max < 1
-  %error "private_free_tasks_max, " private_free_tasks_max ", less than 1."
 %endif
 
 %if mmap_tasks < 1

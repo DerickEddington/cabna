@@ -44,70 +44,42 @@ section .text
 
 
 proc alloc_task:
-  ; Pop a free task struc, from the thread's allocatable-tasks stack, or from
-  ; the shared stack, or allocate more memory from the OS, and return to ret_rsi
-  ; with task pointer in arg1_rdi.  Each thread has its own private
-  ; allocatable-tasks stack, so if that's used, concurrency-safety is not
-  ; needed.  If the shared stack is used, concurrencry-safety is needed.
+  ; Pop a free task struc from the thread's allocatable-tasks stack, or allocate
+  ; more memory from the OS, and return to ret_rsi with task pointer in
+  ; arg1_rdi.  Each thread has its own private allocatable-tasks stack, so
+  ; concurrency-safety is not needed.
   ; Used registers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11.
+
+%ifdef statistics_collection
+  mov ecx, 1
+  lock xadd [t0_stats + stats.in_use], rcx
+  add rcx, 1
+  mov rax, [t0_stats + stats.used_max]
+.retry_max:
+  cmp rcx, rax
+  jbe .not_max
+  lock cmpxchg [t0_stats + stats.used_max], rcx
+  jne .retry_max
+.not_max:
+%endif
 
   stat add qword [t_stats + stats.allocated], 1
 
   mov arg1_rdi, [alloc_s_r15d + stack.head]
   test arg1_rdi, arg1_rdi
-  unlikely jz .from_shared
+  unlikely jz .get_new_space
 
-  sub dword [alloc_s_r15d + stack.size], 1  ; 32-bit alright.
-.from_private:
   ; The next, which might be null, becomes the head.
   mov rax, [arg1_rdi + task.next]
   mov [alloc_s_r15d + stack.head], rax
   mov qword [arg1_rdi + task.next], 0
+  stat sub qword [t_stats + stats.alloc_s_size], 1
   jmp_ind ret_rsi
 
-.from_shared_spin:
-  pause
-  stat add qword [t_stats + stats.exclusion], 1
-.from_shared:
-  bt dword [s_alloc_s + stack.next], 0
-  jc .from_shared_spin  ; Another thread already has it locked.
-  ; Try to lock the stack for our use.
-  lock bts dword [s_alloc_s + stack.next], 0
-  jc .from_shared_spin  ; Another thread just locked it.
-
-  ; Other threads cannot concurrently execute the rest of this procedure.  This
-  ; is what enables the concurrency-safety.
-  mov rax, [s_alloc_s + stack.head]
-  test rax, rax
-  unlikely jz .get_new_space
-
-.have_space:
-  mov arg1_rdi, rax  ; Head is return value.
-  mov ecx, private_free_tasks_max  ; 32-bit alright.
-.take_shared:
-  mov rdx, rax
-  mov rax, [rax + task.next]
-  sub ecx, 1
-  jz .shared_done
-  test rax, rax
-  jnz .take_shared
-.shared_done:
-  ; The untaken, which might be null, becomes the head.
-  mov [s_alloc_s + stack.head], rax
-  ; Unlock the shared stack.
-  and dword [s_alloc_s + stack.next], -2  ; Clear lock bit.
-  ; Push-at-once in private stack.
-  ;;;mov [alloc_s_r15d + stack.head], arg1_rdi  ; Not necessary.
-  mov qword [rdx + task.next], 0
-  mov eax, private_free_tasks_max - 1  ; 32-bit alright.
-  sub eax, ecx
-  mov [alloc_s_r15d + stack.size], eax  ; 1 less because head is returned.
-  jmp .from_private
-
 .get_new_space:
-  ; Get some more space from the OS, divide it into blocks of task strucs, link
-  ; them together, and jump to .have_space.  The fields of the new strucs are
-  ; null because mmap zeros, as needed for future operations.
+  ; Get some more space from the OS, divide into blocks of task strucs, link
+  ; together, push-at-once, and return a struc.  The fields of the new strucs
+  ; are null because mmap zeros, as needed for future operations.
 
   stat add qword [t_stats + stats.mmap], 1
 
@@ -116,7 +88,7 @@ proc alloc_task:
   ;mov ?, r8
   ;mov ?, r10
   ;mov ?, rdx
-  mov [s_alloc_s + stack.head], ret_rsi  ; Just a temporary location.
+  mov [alloc_s_r15d + stack.head], ret_rsi  ; Just a temporary location.
   ;mov ?, rdi
   ;mov ?, rax  ; syscall destroys
   ;mov ?, rcx  ; syscall destroys
@@ -134,19 +106,22 @@ proc alloc_task:
   cmp rax, -4096
   ja .mmap_failed
 
+  ; Reserve first struc for return value.
+  mov arg1_rdi, rax
   ; Divide remaining space into task strucs, and link together.
-  add rsi, rax  ; End of the space.
-  sub rsi, task_size  ; Tail struc is the last block.
+  add rax, rsi  ; End of the space.
+  sub rax, task_size  ; Tail struc is the last block.
   xor edx, edx
 .divide_and_link:
-  mov [rsi + task.next], rdx
-  mov rdx, rsi
-  sub rsi, task_size
-  cmp rsi, rax
-  jae .divide_and_link
-  mov ret_rsi, [s_alloc_s + stack.head]  ; Restore saved.
-  ;;;mov [s_alloc_s + stack.head], rax  ; Not necessary.
-  jmp .have_space
+  mov [rax + task.next], rdx
+  mov rdx, rax
+  sub rax, task_size
+  cmp rax, arg1_rdi
+  ja .divide_and_link
+  mov ret_rsi, [alloc_s_r15d + stack.head]  ; Restore saved.
+  mov [alloc_s_r15d + stack.head], rdx
+  stat mov qword [t_stats + stats.alloc_s_size], mmap_tasks - 1
+  jmp_ind ret_rsi
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
@@ -215,13 +190,13 @@ proc sched_task:
   mov [edx + stack.head], arg1_rdi
 
 %ifdef statistics_collection
-  add qword [ts_stats + edx - ts_exec_ss + stats.sched_mine], 1
-  mov rax, [edx + stack.size]
+  add qword [t_stats + stats.sched_mine], 1
+  mov rax, [t_stats + stats.exec_s_size]
   add rax, 1
-  mov [edx + stack.size], rax
-  cmp rax, [ts_stats + edx - ts_exec_ss + stats.exec_s_max]
+  mov [t_stats + stats.exec_s_size], rax
+  cmp rax, [t_stats + stats.exec_s_max]
   jbe .not_max
-  mov [ts_stats + edx - ts_exec_ss + stats.exec_s_max], rax
+  mov [t_stats + stats.exec_s_max], rax
 .not_max:
 %endif
 
@@ -232,41 +207,29 @@ proc sched_task:
 
 proc free_pet__exec_avail:
   ; Free the previously executing task by pushing it in the thread's
-  ; allocatable-tasks stack, or in the shared stack if the thread's stack
-  ; reached the max, and continue into exec_avail.  Each thread has its own
-  ; private allocatable-tasks stack, so if that's used, concurrency-safety is
-  ; not needed.  If the shared stack is used, concurrency-safety is needed.
+  ; allocatable-tasks stack, and continue into exec_avail.  Each thread has its
+  ; own private allocatable-tasks stack, so concurrency-safety is not needed.
+  ; Note that task strucs originally from another thread can be freed into the
+  ; thread's stack, because of task-giving.
   ; Used registers: rax, and those of exec_avail.
 
-  stat add qword [t_stats + stats.freed], 1
+  stat lock sub qword [t0_stats + stats.in_use], 1
 
-  mov eax, [alloc_s_r15d + stack.size]  ; 32-bit alright.
-  cmp eax, private_free_tasks_max
-  jae .in_shared
-
-  add eax, 1
-  mov [alloc_s_r15d + stack.size], eax  ; 32-bit alright.
   mov rax, [alloc_s_r15d + stack.head]
   mov [cet_r14 + task.next], rax
   mov [alloc_s_r15d + stack.head], cet_r14
-  jmp exec_avail
 
-.in_shared_spin:
-  pause
-  stat add qword [t_stats + stats.exclusion], 1
-.in_shared:
-  bt dword [s_alloc_s + stack.next], 0
-  jc .in_shared_spin  ; Another thread already has it locked.
-  ; Try to lock the stack for our use.
-  lock bts dword [s_alloc_s + stack.next], 0
-  jc .in_shared_spin  ; Another thread just locked it.
-  ; Other threads cannot concurrently execute the rest of this procedure.  This
-  ; is what enables the concurrency-safety.
-  mov rax, [s_alloc_s + stack.head]
-  mov [cet_r14 + task.next], rax
-  mov [s_alloc_s + stack.head], cet_r14
-  ; Unlock the shared stack.
-  and dword [s_alloc_s + stack.next], -2  ; Clear lock bit.
+%ifdef statistics_collection
+  add qword [t_stats + stats.freed], 1
+  mov rax, [t_stats + stats.alloc_s_size]
+  add rax, 1
+  mov [t_stats + stats.alloc_s_size], rax
+  cmp rax, [t_stats + stats.alloc_s_max]
+  jbe .not_max
+  mov [t_stats + stats.alloc_s_max], rax
+.not_max:
+%endif
+
   jmp exec_avail
 
 
@@ -287,13 +250,14 @@ proc exec_avail:
   test cet_r14, cet_r14
   jz .empty
 
-  stat sub qword [edx + stack.size], 1
-  stat add qword [t_stats + stats.executed_mine], 1
-
   ; The next, which might be null, becomes the head.
   mov rax, [cet_r14 + task.next]
   mov [edx + stack.head], rax
   mov qword [cet_r14 + task.next], 0
+
+  stat sub qword [t_stats + stats.exec_s_size], 1
+  stat add qword [t_stats + stats.executed_mine], 1
+
   ; Execute the task's instructions.  Tasks are responsible for giving control
   ; back to exec_evail.
   jmp_ind [cet_r14 + task.exec]
@@ -390,15 +354,19 @@ proc print_stats:
 
   ; Temporary struc for the totals of all threads.
   sub rsp, stats_size
-  ;;; [rsp + stats.exec_s_max] not totaled.
+  ; [rsp + stats.exec_s_max] not totaled.
+  ; [rsp + stats.exec_s_size] not totaled.
   mov qword [rsp + stats.execute_calls], 0
   mov qword [rsp + stats.executed_mine], 0
   mov qword [rsp + stats.wait], 0
   mov qword [rsp + stats.sched_calls], 0
   mov qword [rsp + stats.sched_mine], 0
+  ; [rsp + stats.alloc_s_max] not totaled.
+  ; [rsp + stats.alloc_s_size] not totaled.
   mov qword [rsp + stats.allocated], 0
   mov qword [rsp + stats.freed], 0
-  mov qword [rsp + stats.exclusion], 0
+  ; [rsp + stats.used_max] not totaled.
+  ; [rsp + stats.in_use] not totaled.
   mov qword [rsp + stats.mmap], 0
 
   mov ebx, amount_threads - 1
@@ -412,6 +380,11 @@ proc print_stats:
 
   mov rsi, [ts_stats + ebx + stats.exec_s_max]
   mov edi, stats_exec_s_max_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.exec_s_size]
+  mov edi, stats_exec_s_size_fmtstr
   mov eax, 0
   call printf
 
@@ -445,6 +418,16 @@ proc print_stats:
   mov eax, 0
   call printf
 
+  mov rsi, [ts_stats + ebx + stats.alloc_s_max]
+  mov edi, stats_alloc_s_max_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.alloc_s_size]
+  mov edi, stats_alloc_s_size_fmtstr
+  mov eax, 0
+  call printf
+
   mov rsi, [ts_stats + ebx + stats.allocated]
   add [rsp + stats.allocated], rsi
   mov edi, stats_allocated_fmtstr
@@ -454,12 +437,6 @@ proc print_stats:
   mov rsi, [ts_stats + ebx + stats.freed]
   add [rsp + stats.freed], rsi
   mov edi, stats_freed_fmtstr
-  mov eax, 0
-  call printf
-
-  mov rsi, [ts_stats + ebx + stats.exclusion]
-  add [rsp + stats.exclusion], rsi
-  mov edi, stats_exclusion_fmtstr
   mov eax, 0
   call printf
 
@@ -522,8 +499,13 @@ proc print_stats:
   mov eax, 0
   call printf
 
-  mov rsi, [rsp + stats.exclusion]
-  mov edi, stats_exclusion_fmtstr
+  mov rsi, [t0_stats + stats.used_max]
+  mov edi, stats_used_max_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [t0_stats + stats.in_use]
+  mov edi, stats_in_use_fmtstr
   mov eax, 0
   call printf
 
@@ -571,29 +553,12 @@ t%[n]_exec_s:
   istruc stack
     at stack.head, dq 0
     at stack.next, dq t%[n]_exec_s
-    at stack.size, dq 0  ; Only used when statistics collection is enabled.
     at stack.need, dq 0
   iend
 
 align 128, db 0
 
 %endrep
-
-
-
-
-; Shared allocatable-tasks stack.
-
-s_alloc_s:
-
-  istruc stack
-    at stack.head, dq 0
-    at stack.next, dq 0  ; Only used for lock bit.
-    at stack.size, dq 0  ; Not used.
-    at stack.need, dq 0  ; Not used.
-  iend
-
-align 128, db 0
 
 
 
@@ -610,7 +575,6 @@ t%[n]_alloc_s:
   istruc stack
     at stack.head, dq t%[n]_alloc_s_head
     at stack.next, dq 0  ; Not used.
-    at stack.size, dq statically_allocated_free_tasks
     at stack.need, dq 0  ; Not used.
   iend
 
@@ -714,14 +678,18 @@ ts_stats:
 
   istruc stats
     at stats.exec_s_max,     dq 0
+    at stats.exec_s_size,    dq 0
     at stats.execute_calls,  dq 0
     at stats.executed_mine,  dq 0
     at stats.wait,           dq 0
     at stats.sched_calls,    dq 0
     at stats.sched_mine,     dq 0
+    at stats.alloc_s_max,    dq statically_allocated_free_tasks
+    at stats.alloc_s_size,   dq statically_allocated_free_tasks
     at stats.allocated,      dq 0
     at stats.freed,          dq 0
-    at stats.exclusion,      dq 0
+    at stats.used_max,       dq 0
+    at stats.in_use,         dq 0
     at stats.mmap,           dq 0
   iend
 
@@ -730,16 +698,20 @@ align 128, db 0  ; Necessary because the exec and alloc stacks are used to find
 %endrep
 
 stats_tid_fmtstr:            db `Thread %lu:\n`,0
-stats_exec_s_max_fmtstr:     db `  exec_s max:    %llu\n`,0
-stats_execute_calls_fmtstr:  db `  execute calls: %llu\n`,0
-stats_executed_mine_fmtstr:  db `  executed mine: %llu\n`,0
-stats_wait_fmtstr:           db `  waits:         %llu\n`,0
-stats_sched_calls_fmtstr:    db `  push calls:    %llu\n`,0
-stats_sched_mine_fmtstr:     db `  pushed mine:   %llu\n`,0
-stats_allocated_fmtstr:      db `  allocated:     %llu\n`,0
-stats_freed_fmtstr:          db `  freed:         %llu\n`,0
-stats_exclusion_fmtstr:      db `  exclusions:    %llu\n`,0
-stats_mmap_fmtstr:           db `  mmaps:         %llu\n`,0
+stats_exec_s_max_fmtstr:     db `  exec_s max:    %15llu\n`,0
+stats_exec_s_size_fmtstr:    db `  exec_s size:   %15llu\n`,0
+stats_execute_calls_fmtstr:  db `  execute calls: %15llu\n`,0
+stats_executed_mine_fmtstr:  db `  executed mine: %15llu\n`,0
+stats_wait_fmtstr:           db `  waits:         %15llu\n`,0
+stats_sched_calls_fmtstr:    db `  sched calls:   %15llu\n`,0
+stats_sched_mine_fmtstr:     db `  sched mine:    %15llu\n`,0
+stats_alloc_s_max_fmtstr:    db `  alloc_s max:   %15llu\n`,0
+stats_alloc_s_size_fmtstr:   db `  alloc_s size:  %15llu\n`,0
+stats_allocated_fmtstr:      db `  allocated:     %15llu\n`,0
+stats_freed_fmtstr:          db `  freed:         %15llu\n`,0
+stats_used_max_fmtstr:       db `  used max:      %15llu\n`,0
+stats_in_use_fmtstr:         db `  in use:        %15llu\n`,0
+stats_mmap_fmtstr:           db `  mmaps:         %15llu\n`,0
 stats_mmap_kb_fmtstr:        db `  KB mmaped:     %llu,%llu\n`,0
 stats_total_fmtstr:          db `Totals of %lu threads:\n`,0
 
