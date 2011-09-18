@@ -1,8 +1,22 @@
-Investigate redesigning memory management to return freed strucs to their owner.
-Otherwise, as currently, a thread can end up with way more free strucs than it
-needs, which deprives other threads causing them to mmap way too much.  Try to
-make this mutex-free.  Each thread has references to stacks for each other
-thread to give freed strucs belonging to the thread.
+Investigate why making the amount of threads greater than 1 makes fibonacci
+slower.  I suspect cache coherence issues caused by "false sharing".
+
+Is "false sharing" happening?  "Place each synchronization variable alone,
+separated by 128 bytes or in a separate cache line."  Locked variables should
+not be with any other fields in their 128-byte block?  I think this means struc
+sizes need to increase.
+
+Investigate redesigning so that r15d holds the thread's ID, and this is used for
+indexed access to the stacks and other thread-specific data.  I think the stack
+struc would disappear.  This might affect "false sharing" favorably?  This might
+influence various aspects of the design to be cleaner?
+
+Investigate changing others_freed so that each thread only has one stack for
+others to free to, instead of each thread having stacks for all other threads.
+This will make the .data section size proportionate to the amount of threads,
+instead of to the square of the amount of threads.  How does this affect
+performance?  It seems unlikely that exclusion will happen much more or that the
+spin-loop will last longer.
 
 Investigate redesigning task giving so that there's only one global field that
 indicates what thread needs a task.  Needy threads compete for setting the field
@@ -13,14 +27,10 @@ gift field.
 Investigate if there's a point where multi-processor Cabna fibonacci is faster
 than single-processor Ikarus fibonacci.
 
-Is "false sharing" happening?  "Place each synchronization variable alone,
-separated by 128 bytes or in a separate cache line."  Locked variables should
-not be with any other fields in their 128-byte block?  I think this means struc
-sizes need to increase.
-
-
 
 Rename conv file to ?
+
+Fix preprocessor error messages so the values, not symbols, are printed.
 
 Is (un)likely actually a good idea?  Maybe not portable to other processors.
 Seems to screw up objdump disassembly.  Review performance difference again.

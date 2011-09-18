@@ -44,9 +44,10 @@ section .text
 
 
 proc alloc_task:
-  ; Pop a free task struc from the thread's allocatable-tasks stack, or allocate
-  ; more memory from the OS, and return to ret_rsi with task pointer in
-  ; arg1_rdi.  Each thread has its own private allocatable-tasks stack, so
+  ; Pop a free task struc from the thread's allocatable-tasks stack, or see if
+  ; other threads have freed some of the thread's strucs, or allocate more
+  ; memory from the OS, and return to ret_rsi with task pointer in arg1_rdi.
+  ; Each thread has its own private allocatable-tasks stack, so if that's used
   ; concurrency-safety is not needed.
   ; Used registers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11.
 
@@ -57,18 +58,19 @@ proc alloc_task:
   mov rax, [t0_stats + stats.used_max]
 .retry_max:
   cmp rcx, rax
-  jbe .not_max
+  jbe .not_used_max
   lock cmpxchg [t0_stats + stats.used_max], rcx
   jne .retry_max
-.not_max:
+.not_used_max:
 %endif
 
   stat add qword [t_stats + stats.allocated], 1
 
   mov arg1_rdi, [alloc_s_r15d + stack.head]
   test arg1_rdi, arg1_rdi
-  unlikely jz .get_new_space
+  unlikely jz .others_freed
 
+.done:
   ; The next, which might be null, becomes the head.
   mov rax, [arg1_rdi + task.next]
   mov [alloc_s_r15d + stack.head], rax
@@ -76,10 +78,40 @@ proc alloc_task:
   stat sub qword [t_stats + stats.alloc_s_size], 1
   jmp_ind ret_rsi
 
+.others_freed:
+  mov edx, [alloc_s_r15d + stack.others_freed]  ; 32-bit alright.
+  mov ecx, amount_threads * 128
+  xor eax, eax
+.others_per:
+  sub ecx, 128
+  jc .get_new_space  ; None from other threads.
+  mov rdi, [edx + ecx + stack.head]
+  test rdi, rdi
+  jz .others_per
+  xchg [edx + ecx + stack.head], rax  ; Locking automatically done for xchg.
+  test rax, rax
+  jz .others_per
+  mov arg1_rdi, rax  ; Reserve first struc for return value.
+%ifdef statistics_collection
+  xor ecx, ecx
+.others_size:
+  add rcx, 1
+  mov rax, [rax + task.next]
+  test rax, rax
+  jnz .others_size
+  mov [t_stats + stats.alloc_s_size], rcx
+  cmp rcx, [t_stats + stats.alloc_s_max]
+  jbe .not_alloc_s_max
+  mov [t_stats + stats.alloc_s_max], rcx
+.not_alloc_s_max:
+  add qword [t_stats + stats.alloc_others], 1
+%endif
+  jmp .done
+
 .get_new_space:
   ; Get some more space from the OS, divide into blocks of task strucs, link
-  ; together, push-at-once, and return a struc.  The fields of the new strucs
-  ; are null because mmap zeros, as needed for future operations.
+  ; together, push-at-once, and return a struc.  The unset fields of the new
+  ; strucs are null because mmap zeros, as needed for future operations.
 
   stat add qword [t_stats + stats.mmap], 1
 
@@ -108,11 +140,13 @@ proc alloc_task:
 
   ; Reserve first struc for return value.
   mov arg1_rdi, rax
+  mov [rax + task.owner], alloc_s_r15d
   ; Divide remaining space into task strucs, and link together.
   add rax, rsi  ; End of the space.
   sub rax, task_size  ; Tail struc is the last block.
   xor edx, edx
 .divide_and_link:
+  mov [rax + task.owner], alloc_s_r15d
   mov [rax + task.next], rdx
   mov rdx, rax
   sub rax, task_size
@@ -207,20 +241,23 @@ proc sched_task:
 
 proc free_pet__exec_avail:
   ; Free the previously executing task by pushing it in the thread's
-  ; allocatable-tasks stack, and continue into exec_avail.  Each thread has its
-  ; own private allocatable-tasks stack, so concurrency-safety is not needed.
-  ; Note that task strucs originally from another thread can be freed into the
-  ; thread's stack, because of task-giving.
-  ; Used registers: rax, and those of exec_avail.
+  ; allocatable-tasks stack; or if the struc belongs to another thread, give it
+  ; to the owner; and continue into exec_avail.  Each thread has its own private
+  ; allocatable-tasks stack, so if that's used concurrency-safety is not needed.
+  ; Used registers: rax, rdx, and those of exec_avail.
 
   stat lock sub qword [t0_stats + stats.in_use], 1
+  stat add qword [t_stats + stats.freed], 1
+
+  mov eax, [cet_r14 + task.owner]  ; 32-bit alright.
+  cmp eax, alloc_s_r15d
+  jne .not_mine
 
   mov rax, [alloc_s_r15d + stack.head]
   mov [cet_r14 + task.next], rax
   mov [alloc_s_r15d + stack.head], cet_r14
 
 %ifdef statistics_collection
-  add qword [t_stats + stats.freed], 1
   mov rax, [t_stats + stats.alloc_s_size]
   add rax, 1
   mov [t_stats + stats.alloc_s_size], rax
@@ -230,6 +267,20 @@ proc free_pet__exec_avail:
 .not_max:
 %endif
 
+  jmp exec_avail
+
+.not_mine:
+  mov edx, [eax + stack.others_freed]  ; 32-bit alright.
+  mov eax, alloc_s_r15d
+  sub eax, ts_alloc_ss
+  add edx, eax  ; The stack for this thread to give freed strucs to the owner.
+  mov rax, [edx + stack.head]
+.retry:
+  ; pause  ; TODO: Good? Only loops at most once.
+  mov [cet_r14 + task.next], rax
+  lock cmpxchg [edx + stack.head], cet_r14
+  jne .retry
+  stat add qword [t_stats + stats.freed_others], 1
   jmp exec_avail
 
 
@@ -364,7 +415,9 @@ proc print_stats:
   ; [rsp + stats.alloc_s_max] not totaled.
   ; [rsp + stats.alloc_s_size] not totaled.
   mov qword [rsp + stats.allocated], 0
+  mov qword [rsp + stats.alloc_others], 0
   mov qword [rsp + stats.freed], 0
+  mov qword [rsp + stats.freed_others], 0
   ; [rsp + stats.used_max] not totaled.
   ; [rsp + stats.in_use] not totaled.
   mov qword [rsp + stats.mmap], 0
@@ -434,9 +487,21 @@ proc print_stats:
   mov eax, 0
   call printf
 
+  mov rsi, [ts_stats + ebx + stats.alloc_others]
+  add [rsp + stats.alloc_others], rsi
+  mov edi, stats_alloc_others_fmtstr
+  mov eax, 0
+  call printf
+
   mov rsi, [ts_stats + ebx + stats.freed]
   add [rsp + stats.freed], rsi
   mov edi, stats_freed_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [ts_stats + ebx + stats.freed_others]
+  add [rsp + stats.freed_others], rsi
+  mov edi, stats_freed_others_fmtstr
   mov eax, 0
   call printf
 
@@ -494,8 +559,18 @@ proc print_stats:
   mov eax, 0
   call printf
 
+  mov rsi, [rsp + stats.alloc_others]
+  mov edi, stats_alloc_others_fmtstr
+  mov eax, 0
+  call printf
+
   mov rsi, [rsp + stats.freed]
   mov edi, stats_freed_fmtstr
+  mov eax, 0
+  call printf
+
+  mov rsi, [rsp + stats.freed_others]
+  mov edi, stats_freed_others_fmtstr
   mov eax, 0
   call printf
 
@@ -551,9 +626,10 @@ t%[n]_exec_s:
 %assign n  (n + 1) % amount_threads  ; Last's .next = first.
 
   istruc stack
-    at stack.head, dq 0
-    at stack.next, dq t%[n]_exec_s
-    at stack.need, dq 0
+    at stack.head,          dq 0
+    at stack.next,          dq t%[n]_exec_s
+    at stack.need,          dq 0
+    at stack.others_freed,  dq 0  ; Not used.
   iend
 
 align 128, db 0
@@ -573,12 +649,47 @@ ts_alloc_ss:
 t%[n]_alloc_s:
 
   istruc stack
-    at stack.head, dq t%[n]_alloc_s_head
-    at stack.next, dq 0  ; Not used.
-    at stack.need, dq 0  ; Not used.
+    at stack.head,          dq t%[n]_alloc_s_head
+    at stack.next,          dq 0  ; Not used.
+    at stack.need,          dq 0  ; Not used.
+    at stack.others_freed,  dq t%[n]_others_freed_ss
   iend
 
 align 128, db 0
+
+%assign n  n + 1
+%endrep
+
+
+
+
+; Threads' arrays of stacks for other threads to free strucs to each other.
+
+ts_others_freed_ass:
+
+; Note that this grows exponentially as the square of amount_threads.
+
+%assign n 0
+%rep amount_threads
+
+t%[n]_others_freed_ss:
+
+%assign a 0
+%rep amount_threads
+
+t%[n]_others_freed_s%[a]:
+
+  istruc stack
+    at stack.head,          dq 0
+    at stack.next,          dq 0  ; Not used.
+    at stack.need,          dq 0  ; Not used.
+    at stack.others_freed,  dq 0  ; Not used.
+  iend
+
+align 128, db 0
+
+%assign a  a + 1
+%endrep
 
 %assign n  n + 1
 %endrep
@@ -597,6 +708,7 @@ t%[n]_alloc_s_head:
 
   istruc task
     at task.next,    dq t%[n]_alloc_s_1
+    at task.owner,   dq t%[n]_alloc_s
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -611,7 +723,6 @@ t%[n]_alloc_s_head:
     at task.arg8,    dq 0
     at task.arg9,    dq 0
     at task.arg10,   dq 0
-    at task.arg11,   dq 0
   iend
 
 
@@ -622,6 +733,7 @@ t%[n]_alloc_s_1:
 
   istruc task
     at task.next,    dq t%[n]_alloc_s_%[a]
+    at task.owner,   dq t%[n]_alloc_s
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -636,7 +748,6 @@ t%[n]_alloc_s_1:
     at task.arg8,    dq 0
     at task.arg9,    dq 0
     at task.arg10,   dq 0
-    at task.arg11,   dq 0
   iend
 
 t%[n]_alloc_s_%[a]:
@@ -647,6 +758,7 @@ t%[n]_alloc_s_%[a]:
 
   istruc task
     at task.next,    dq 0
+    at task.owner,   dq t%[n]_alloc_s
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -661,7 +773,6 @@ t%[n]_alloc_s_%[a]:
     at task.arg8,    dq 0
     at task.arg9,    dq 0
     at task.arg10,   dq 0
-    at task.arg11,   dq 0
   iend
 
 %assign n  n + 1
@@ -687,7 +798,9 @@ ts_stats:
     at stats.alloc_s_max,    dq statically_allocated_free_tasks
     at stats.alloc_s_size,   dq statically_allocated_free_tasks
     at stats.allocated,      dq 0
+    at stats.alloc_others,   dq 0
     at stats.freed,          dq 0
+    at stats.freed_others,   dq 0
     at stats.used_max,       dq 0
     at stats.in_use,         dq 0
     at stats.mmap,           dq 0
@@ -708,7 +821,9 @@ stats_sched_mine_fmtstr:     db `  sched mine:    %15llu\n`,0
 stats_alloc_s_max_fmtstr:    db `  alloc_s max:   %15llu\n`,0
 stats_alloc_s_size_fmtstr:   db `  alloc_s size:  %15llu\n`,0
 stats_allocated_fmtstr:      db `  allocated:     %15llu\n`,0
+stats_alloc_others_fmtstr:   db `  alloc others:  %15llu\n`,0
 stats_freed_fmtstr:          db `  freed:         %15llu\n`,0
+stats_freed_others_fmtstr:   db `  freed others:  %15llu\n`,0
 stats_used_max_fmtstr:       db `  used max:      %15llu\n`,0
 stats_in_use_fmtstr:         db `  in use:        %15llu\n`,0
 stats_mmap_fmtstr:           db `  mmaps:         %15llu\n`,0

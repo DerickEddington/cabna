@@ -86,9 +86,10 @@
 
 struc task
   .next:    resq 1
+  .owner:   resq 1
   .rcvr:    resq 1
   .ridx:    resq 1
-  .need:    resq 1  ; Locked field, concurrently updated atomically.
+  .need:    resq 1  ; Updated atomically.  Only low 32 bits used.
   .exec:    resq 1
   .arg1:    resq 1
   .arg2:    resq 1
@@ -100,13 +101,12 @@ struc task
   .arg8:    resq 1
   .arg9:    resq 1
   .arg10:   resq 1
-  .arg11:   resq 1
 endstruc
 
 %assign task.args task.exec
 
 %if task_size != 128
-  %warning "Task size " task_size " not 128."
+  %error "Task size " task_size " not 128."
 %endif
 
 
@@ -114,12 +114,15 @@ endstruc
 ; initialized, which allows concurrent reading of it without locking.  For
 ; allocatable-tasks stacks, concurrent access doesn't occur, and the .next field
 ; is never used.  The .need field is used only for executable-tasks stacks, with
-; a special protocol for concurrent access.
+; a special protocol for concurrent access.  The .others_freed field is used
+; only for allocatable-tasks stacks, with a special protocol for concurrent
+; access.
 
 struc stack
-  .head: resq 1
-  .next: resq 1
-  .need: resq 1
+  .head:          resq 1
+  .next:          resq 1
+  .need:          resq 1
+  .others_freed:  resq 1
 endstruc
 
 %if stack_size > 128
@@ -142,7 +145,9 @@ struc stats
   .alloc_s_max:    resq 1
   .alloc_s_size:   resq 1
   .allocated:      resq 1
+  .alloc_others:   resq 1
   .freed:          resq 1
+  .freed_others:   resq 1
   .used_max:       resq 1  ; Only thread-0's used.
   .in_use:         resq 1  ; Only thread-0's used.
   .mmap:           resq 1
