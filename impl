@@ -314,9 +314,9 @@ proc exec_avail:
 
 .empty:
   mov qword [needy + tid_r15d], 1
+  stat add qword [statistics + tid_r15d + stats.needy], 1
 .wait:
   pause  ; Doesn't seem to affect speed. Hopefully reduces power consumption.
-  stat add qword [statistics + tid_r15d + stats.wait], 1
   mov cet_r14, [needy + tid_r15d]
   test cet_r14, -2
   jz .wait
@@ -406,7 +406,7 @@ proc print_stats:
   ; [rsp + stats.exec_s_size] not totaled.
   mov qword [rsp + stats.execute_calls], 0
   mov qword [rsp + stats.executed_mine], 0
-  mov qword [rsp + stats.wait], 0
+  mov qword [rsp + stats.needy], 0
   mov qword [rsp + stats.sched_calls], 0
   mov qword [rsp + stats.sched_mine], 0
   ; [rsp + stats.alloc_s_max] not totaled.
@@ -450,9 +450,9 @@ proc print_stats:
   mov eax, 0
   call printf
 
-  mov rsi, [statistics + ebx + stats.wait]
-  add [rsp + stats.wait], rsi
-  mov edi, stats_wait_fmtstr
+  mov rsi, [statistics + ebx + stats.needy]
+  add [rsp + stats.needy], rsi
+  mov edi, stats_needy_fmtstr
   mov eax, 0
   call printf
 
@@ -536,8 +536,8 @@ proc print_stats:
   mov eax, 0
   call printf
 
-  mov rsi, [rsp + stats.wait]
-  mov edi, stats_wait_fmtstr
+  mov rsi, [rsp + stats.needy]
+  mov edi, stats_needy_fmtstr
   mov eax, 0
   call printf
 
@@ -786,7 +786,7 @@ statistics:
     at stats.exec_s_size,    dq 0
     at stats.execute_calls,  dq 0
     at stats.executed_mine,  dq 0
-    at stats.wait,           dq 0
+    at stats.needy,          dq 0
     at stats.sched_calls,    dq 0
     at stats.sched_mine,     dq 0
     at stats.alloc_s_max,    dq statically_allocated_free_tasks
@@ -809,7 +809,7 @@ stats_exec_s_max_fmtstr:     db `  exec_s max:    %15llu\n`,0
 stats_exec_s_size_fmtstr:    db `  exec_s size:   %15llu\n`,0
 stats_execute_calls_fmtstr:  db `  execute calls: %15llu\n`,0
 stats_executed_mine_fmtstr:  db `  executed mine: %15llu\n`,0
-stats_wait_fmtstr:           db `  waits:         %15llu\n`,0
+stats_needy_fmtstr:          db `  needy:         %15llu\n`,0
 stats_sched_calls_fmtstr:    db `  sched calls:   %15llu\n`,0
 stats_sched_mine_fmtstr:     db `  sched mine:    %15llu\n`,0
 stats_alloc_s_max_fmtstr:    db `  alloc_s max:   %15llu\n`,0

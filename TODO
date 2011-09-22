@@ -1,9 +1,6 @@
 Change sched_task to give the task to a needy thread regardless of whether the
 executing thread's stack is empty.
 
-Instead of stats.wait, have stats.needy - statistic of now many times a thread
-was needy, instead of how many times it looped when needy.
-
 Investigate having a "thread" struc which defines the variables used by threads,
 instead of using thread-specific offsets from global symbols.  This will place a
 thread's variables closer, which might improve processor caching.  As long as it
