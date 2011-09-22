@@ -1,15 +1,19 @@
-Investigate why making the amount of threads greater than 1 makes fibonacci
-slower.  I suspect cache coherence issues caused by "false sharing".
+Change sched_task to give the task to a needy thread regardless of whether the
+executing thread's stack is empty.
 
-Is "false sharing" happening?  "Place each synchronization variable alone,
-separated by 128 bytes or in a separate cache line."  Locked variables should
-not be with any other fields in their 128-byte block?  I think this means struc
-sizes need to increase.
+Instead of stats.wait, have stats.needy - statistic of now many times a thread
+was needy, instead of how many times it looped when needy.
 
-Investigate redesigning so that r15d holds the thread's ID, and this is used for
-indexed access to the stacks and other thread-specific data.  I think the stack
-struc would disappear.  This might affect "false sharing" favorably?  This might
-influence various aspects of the design to be cleaner?
+Investigate having a "thread" struc which defines the variables used by threads,
+instead of using thread-specific offsets from global symbols.  This will place a
+thread's variables closer, which might improve processor caching.  As long as it
+doesn't degrade caching, it seems a cleaner way.  128-byte alignment still
+necessary for some variables, for bus-locking and to avoid false sharing.
+
+Investigate having, in addition to .needy, a .given variable where thread's
+donate an executable-task to another thread instead of giving it in .needy.  The
+giver atomically clears .needy, and the waiting thread waits on .given.  Does
+this result in better cache behavior?
 
 Investigate changing others_freed so that each thread only has one stack for
 others to free to, instead of each thread having stacks for all other threads.
@@ -26,6 +30,8 @@ gift field.
 
 Investigate if there's a point where multi-processor Cabna fibonacci is faster
 than single-processor Ikarus fibonacci.
+
+Review adding more comments for new designs.
 
 
 Rename conv file to ?

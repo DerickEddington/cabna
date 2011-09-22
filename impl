@@ -24,10 +24,10 @@ extern bug
 ; It is assumed that all Cabna code and data is located in 32-bit address space,
 ; which allows assuming Cabna addresses fit in 32 bits.  This is taken advantage
 ; of to use 32-bit operations instead of 64-bit, as the processor manufacturers
-; recommend, when possible, for optimization, and also to fit two pointers in
-; r15.  Cabna is still a 64-bit system intended for 64-bit use, and 64-bit
-; addresses and operations are used for users' stuff and strucs that might be
-; allocated in 64-bit space.
+; recommend, when possible, for optimization, and also to fit two values in r15.
+; Cabna is still a 64-bit system intended for 64-bit use, and 64-bit addresses
+; and operations are used for users' stuff and strucs that might be allocated in
+; 64-bit space.
 
 
 ; Users' responsibilities:
@@ -53,58 +53,59 @@ proc alloc_task:
 
 %ifdef statistics_collection
   mov ecx, 1
-  lock xadd [t0_stats + stats.in_use], rcx
+  lock xadd [statistics + 0 + stats.in_use], rcx
   add rcx, 1
-  mov rax, [t0_stats + stats.used_max]
+  mov rax, [statistics + 0 + stats.used_max]
 .retry_max:
   cmp rcx, rax
   jbe .not_used_max
-  lock cmpxchg [t0_stats + stats.used_max], rcx
+  lock cmpxchg [statistics + 0 + stats.used_max], rcx
   jne .retry_max
 .not_used_max:
 %endif
 
-  stat add qword [t_stats + stats.allocated], 1
+  stat add qword [statistics + tid_r15d + stats.allocated], 1
 
-  mov arg1_rdi, [alloc_s_r15d + stack.head]
+  mov arg1_rdi, [allocatables + tid_r15d]
   test arg1_rdi, arg1_rdi
-  unlikely jz .others_freed
+  unlikely jz .orphans
 
 .done:
   ; The next, which might be null, becomes the head.
   mov rax, [arg1_rdi + task.next]
-  mov [alloc_s_r15d + stack.head], rax
+  mov [allocatables + tid_r15d], rax
   mov qword [arg1_rdi + task.next], 0
-  stat sub qword [t_stats + stats.alloc_s_size], 1
+  stat sub qword [statistics + tid_r15d + stats.alloc_s_size], 1
   jmp_ind ret_rsi
 
-.others_freed:
-  mov edx, [alloc_s_r15d + stack.others_freed]  ; 32-bit alright.
+.orphans:
+  mov rdx, orphans_tid_r15
+  shr rdx, 32  ; The 32-bit pointer to the thread's orphans stacks.
   mov ecx, amount_threads * 128
-  xor eax, eax
-.others_per:
+.orphans_from:
   sub ecx, 128
   jc .get_new_space  ; None from other threads.
-  mov rdi, [edx + ecx + stack.head]
-  test rdi, rdi
-  jz .others_per
-  xchg [edx + ecx + stack.head], rax  ; Locking automatically done for xchg.
+  mov rax, [edx + ecx]
   test rax, rax
-  jz .others_per
-  mov arg1_rdi, rax  ; Reserve first struc for return value.
+  jz .orphans_from
+  ; arg1_rdi already null.
+  xchg [edx + ecx], arg1_rdi  ; Locking automatically done for xchg.
+  ; test arg1_rdi, arg1_rdi  ; Not necessary.
+  ; jz .orphans_from
 %ifdef statistics_collection
+  mov rax, arg1_rdi
   xor ecx, ecx
-.others_size:
+.orphans_size:
   add rcx, 1
   mov rax, [rax + task.next]
   test rax, rax
-  jnz .others_size
-  mov [t_stats + stats.alloc_s_size], rcx
-  cmp rcx, [t_stats + stats.alloc_s_max]
+  jnz .orphans_size
+  mov [statistics + tid_r15d + stats.alloc_s_size], rcx
+  cmp rcx, [statistics + tid_r15d + stats.alloc_s_max]
   jbe .not_alloc_s_max
-  mov [t_stats + stats.alloc_s_max], rcx
+  mov [statistics + tid_r15d + stats.alloc_s_max], rcx
 .not_alloc_s_max:
-  add qword [t_stats + stats.alloc_others], 1
+  add qword [statistics + tid_r15d + stats.alloc_orphans], 1
 %endif
   jmp .done
 
@@ -113,14 +114,12 @@ proc alloc_task:
   ; together, push-at-once, and return a struc.  The unset fields of the new
   ; strucs are null because mmap zeros, as needed for future operations.
 
-  stat add qword [t_stats + stats.mmap], 1
-
   ; Save registers.
   ;mov ?, r9
   ;mov ?, r8
   ;mov ?, r10
   ;mov ?, rdx
-  mov [alloc_s_r15d + stack.head], ret_rsi  ; Just a temporary location.
+  mov [allocatables + tid_r15d], ret_rsi  ; Just a temporary location.
   ;mov ?, rdi
   ;mov ?, rax  ; syscall destroys
   ;mov ?, rcx  ; syscall destroys
@@ -140,21 +139,29 @@ proc alloc_task:
 
   ; Reserve first struc for return value.
   mov arg1_rdi, rax
-  mov [rax + task.owner], alloc_s_r15d
+  mov [rax + task.owner], orphans_tid_r15
   ; Divide remaining space into task strucs, and link together.
   add rax, rsi  ; End of the space.
   sub rax, task_size  ; Tail struc is the last block.
   xor edx, edx
 .divide_and_link:
-  mov [rax + task.owner], alloc_s_r15d
+  mov [rax + task.owner], orphans_tid_r15
   mov [rax + task.next], rdx
   mov rdx, rax
   sub rax, task_size
   cmp rax, arg1_rdi
   ja .divide_and_link
-  mov ret_rsi, [alloc_s_r15d + stack.head]  ; Restore saved.
-  mov [alloc_s_r15d + stack.head], rdx
-  stat mov qword [t_stats + stats.alloc_s_size], mmap_tasks - 1
+  mov ret_rsi, [allocatables + tid_r15d]  ; Restore saved.
+  mov [allocatables + tid_r15d], rdx
+%ifdef statistics_collection
+  mov eax, mmap_tasks - 1
+  mov [statistics + tid_r15d + stats.alloc_s_size], rax
+  cmp rax, [statistics + tid_r15d + stats.alloc_s_max]
+  jbe .not_alloc_s_max_2
+  mov [statistics + tid_r15d + stats.alloc_s_max], rax
+.not_alloc_s_max_2:
+  add qword [statistics + tid_r15d + stats.mmap], 1
+%endif
   jmp_ind ret_rsi
 
 .mmap_failed:
@@ -166,8 +173,8 @@ proc alloc_task:
 
 proc supply_retval:
   ; Return a value to the currently executing task's waiting receiver task,
-  ; argument in arg1_rdi.  If the receiver task gets its final value, push the
-  ; task for execution.  Return to ret_rsi.
+  ; argument in arg1_rdi.  If the receiver task gets its final value, schedule
+  ; the task for execution.  Return to ret_rsi.
   ; Used registers: rax, rdx, rsi, rdi.
 
   ; No other threads will access our currently executing task struc, so we can
@@ -181,7 +188,7 @@ proc supply_retval:
   ; it.
   lock sub dword [rax + task.need], 1  ; 32-bit alright.
   cmovz arg1_rdi, rax  ; For sched_task.
-  ; Supplied the final needed argument to rcvr, so push rcvr for execution.
+  ; Supplied the final needed argument to rcvr, so schedule rcvr for execution.
   jz sched_task  ; ret_rsi already set.
   ; Receiver needs more.
   jmp_ind ret_rsi
@@ -195,42 +202,38 @@ proc sched_task:
   ; needy thread.  Argument in arg1_rdi, and return to ret_rsi.
   ; Used registers: rax, rdx, rsi, rdi.
 
-  stat add qword [t_stats + stats.sched_calls], 1
+  stat add qword [statistics + tid_r15d + stats.sched_calls], 1
 
-  mov rdx, exec_s_r15
-  shr rdx, 32
-
-  mov rax, [edx + stack.head]
+  mov rax, [executables + tid_r15d]
   test rax, rax
   jz .in_mine_empty
 
   ; Check if another thread needs a task.
-  mov eax, edx
+  mov eax, amount_threads * 128
 .another:
-  mov eax, [eax + stack.next]  ; 32-bit alright.
-  cmp eax, edx
-  je .in_mine  ; Didn't find a needy thread.
-  bt dword [eax + stack.need], 0
+  sub eax, 128
+  jc .in_mine  ; Didn't find a needy thread.
+  bt dword [needy + eax], 0
   jnc .another
-  lock btr dword [eax + stack.need], 0
+  lock btr dword [needy + eax], 0
   jnc .another
-  mov [eax + stack.need], arg1_rdi
+  mov [needy + eax], arg1_rdi
   jmp_ind ret_rsi
 
 .in_mine:
-  mov rax, [edx + stack.head]
+  mov rax, [executables + tid_r15d]
   mov [arg1_rdi + task.next], rax
 .in_mine_empty:
-  mov [edx + stack.head], arg1_rdi
+  mov [executables + tid_r15d], arg1_rdi
 
 %ifdef statistics_collection
-  add qword [t_stats + stats.sched_mine], 1
-  mov rax, [t_stats + stats.exec_s_size]
+  add qword [statistics + tid_r15d + stats.sched_mine], 1
+  mov rax, [statistics + tid_r15d + stats.exec_s_size]
   add rax, 1
-  mov [t_stats + stats.exec_s_size], rax
-  cmp rax, [t_stats + stats.exec_s_max]
+  mov [statistics + tid_r15d + stats.exec_s_size], rax
+  cmp rax, [statistics + tid_r15d + stats.exec_s_max]
   jbe .not_max
-  mov [t_stats + stats.exec_s_max], rax
+  mov [statistics + tid_r15d + stats.exec_s_max], rax
 .not_max:
 %endif
 
@@ -246,41 +249,40 @@ proc free_pet__exec_avail:
   ; allocatable-tasks stack, so if that's used concurrency-safety is not needed.
   ; Used registers: rax, rdx, and those of exec_avail.
 
-  stat lock sub qword [t0_stats + stats.in_use], 1
-  stat add qword [t_stats + stats.freed], 1
+  stat lock sub qword [statistics + 0 + stats.in_use], 1
+  stat add qword [statistics + tid_r15d + stats.freed], 1
 
-  mov eax, [cet_r14 + task.owner]  ; 32-bit alright.
-  cmp eax, alloc_s_r15d
+  mov rax, [cet_r14 + task.owner]
+  cmp eax, tid_r15d
   jne .not_mine
 
-  mov rax, [alloc_s_r15d + stack.head]
+  mov rax, [allocatables + tid_r15d]
   mov [cet_r14 + task.next], rax
-  mov [alloc_s_r15d + stack.head], cet_r14
+  mov [allocatables + tid_r15d], cet_r14
 
 %ifdef statistics_collection
-  mov rax, [t_stats + stats.alloc_s_size]
+  mov rax, [statistics + tid_r15d + stats.alloc_s_size]
   add rax, 1
-  mov [t_stats + stats.alloc_s_size], rax
-  cmp rax, [t_stats + stats.alloc_s_max]
+  mov [statistics + tid_r15d + stats.alloc_s_size], rax
+  cmp rax, [statistics + tid_r15d + stats.alloc_s_max]
   jbe .not_max
-  mov [t_stats + stats.alloc_s_max], rax
+  mov [statistics + tid_r15d + stats.alloc_s_max], rax
 .not_max:
 %endif
 
   jmp exec_avail
 
 .not_mine:
-  mov edx, [eax + stack.others_freed]  ; 32-bit alright.
-  mov eax, alloc_s_r15d
-  sub eax, ts_alloc_ss
-  add edx, eax  ; The stack for this thread to give freed strucs to the owner.
-  mov rax, [edx + stack.head]
+  ; Compute the stack for this thread to give freed strucs to the owner.
+  shr rax, 32
+  mov edx, eax
+  mov rax, [edx + tid_r15d]
 .retry:
   ; pause  ; TODO: Good? Only loops at most once.
   mov [cet_r14 + task.next], rax
-  lock cmpxchg [edx + stack.head], cet_r14
+  lock cmpxchg [edx + tid_r15d], cet_r14
   jne .retry
-  stat add qword [t_stats + stats.freed_others], 1
+  stat add qword [statistics + tid_r15d + stats.freed_orphans], 1
   jmp exec_avail
 
 
@@ -292,33 +294,30 @@ proc exec_avail:
   ; to the task.
   ; Used registers: rax, rdx, r14
 
-  stat add qword [t_stats + stats.execute_calls], 1
+  stat add qword [statistics + tid_r15d + stats.execute_calls], 1
 
-  mov rdx, exec_s_r15
-  shr rdx, 32
-
-  mov cet_r14, [edx + stack.head]
+  mov cet_r14, [executables + tid_r15d]
   test cet_r14, cet_r14
   jz .empty
 
   ; The next, which might be null, becomes the head.
   mov rax, [cet_r14 + task.next]
-  mov [edx + stack.head], rax
+  mov [executables + tid_r15d], rax
   mov qword [cet_r14 + task.next], 0
 
-  stat sub qword [t_stats + stats.exec_s_size], 1
-  stat add qword [t_stats + stats.executed_mine], 1
+  stat sub qword [statistics + tid_r15d + stats.exec_s_size], 1
+  stat add qword [statistics + tid_r15d + stats.executed_mine], 1
 
   ; Execute the task's instructions.  Tasks are responsible for giving control
   ; back to exec_evail.
   jmp_ind [cet_r14 + task.exec]
 
 .empty:
-  mov qword [edx + stack.need], 1
+  mov qword [needy + tid_r15d], 1
 .wait:
   pause  ; Doesn't seem to affect speed. Hopefully reduces power consumption.
-  stat add qword [t_stats + stats.wait], 1
-  mov cet_r14, [edx + stack.need]
+  stat add qword [statistics + tid_r15d + stats.wait], 1
+  mov cet_r14, [needy + tid_r15d]
   test cet_r14, -2
   jz .wait
   ; Execute the task's instructions.  Tasks are responsible for giving control
@@ -366,20 +365,18 @@ proc _start:
   ja .clone_failed
 
   test rax, rax
-  jnz .loop  ; Caller of clone does this.
-
-  ; New threads do this.
+  jnz .loop  ; Caller of clone jumps.  New threads don't.
 
 .done:
-  ; Set the threads' executable-tasks and allocatable-tasks stacks register.
-  ; Multiply thread ID by 128: the offset of a thread's stacks' addresses.
-  shl ebx, 7
-  ; The executable-tasks stack.
-  lea r15d, [ts_exec_ss + ebx]  ; Assumes it's in 32-bit space.
+  ; Set the threads' ID-offset / orphans register.
+  ; Multiply thread ID by the size of a thread's orphans array.
+  mov eax, amount_threads * 128
+  mul rbx  ; (High-order bits of product, in rdx, are always zero.)
+  lea r15d, [orphans + rax]
   shl r15, 32  ; It lives in the high 32 bits.
-  ; The allocatable-tasks stack.
-  lea eax, [ts_alloc_ss + ebx]  ; Assumes it's in 32-bit space.
-  or r15, rax  ; It lives in the low 32 bits.
+  ; Multiply thread ID by 128: the offset of a thread's variables.
+  shl ebx, 7
+  or r15, rbx  ; It lives in the low 32 bits.
   ; Begin executing the user's program.
   test ebx, ebx
   jz main  ; Initial thread, thread 0, does this.
@@ -415,9 +412,9 @@ proc print_stats:
   ; [rsp + stats.alloc_s_max] not totaled.
   ; [rsp + stats.alloc_s_size] not totaled.
   mov qword [rsp + stats.allocated], 0
-  mov qword [rsp + stats.alloc_others], 0
+  mov qword [rsp + stats.alloc_orphans], 0
   mov qword [rsp + stats.freed], 0
-  mov qword [rsp + stats.freed_others], 0
+  mov qword [rsp + stats.freed_orphans], 0
   ; [rsp + stats.used_max] not totaled.
   ; [rsp + stats.in_use] not totaled.
   mov qword [rsp + stats.mmap], 0
@@ -431,88 +428,88 @@ proc print_stats:
   ; Multiply thread ID by 128: the offset of the thread's stats address.
   shl ebx, 7
 
-  mov rsi, [ts_stats + ebx + stats.exec_s_max]
+  mov rsi, [statistics + ebx + stats.exec_s_max]
   mov edi, stats_exec_s_max_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.exec_s_size]
+  mov rsi, [statistics + ebx + stats.exec_s_size]
   mov edi, stats_exec_s_size_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.execute_calls]
+  mov rsi, [statistics + ebx + stats.execute_calls]
   add [rsp + stats.execute_calls], rsi
   mov edi, stats_execute_calls_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.executed_mine]
+  mov rsi, [statistics + ebx + stats.executed_mine]
   add [rsp + stats.executed_mine], rsi
   mov edi, stats_executed_mine_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.wait]
+  mov rsi, [statistics + ebx + stats.wait]
   add [rsp + stats.wait], rsi
   mov edi, stats_wait_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.sched_calls]
+  mov rsi, [statistics + ebx + stats.sched_calls]
   add [rsp + stats.sched_calls], rsi
   mov edi, stats_sched_calls_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.sched_mine]
+  mov rsi, [statistics + ebx + stats.sched_mine]
   add [rsp + stats.sched_mine], rsi
   mov edi, stats_sched_mine_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.alloc_s_max]
+  mov rsi, [statistics + ebx + stats.alloc_s_max]
   mov edi, stats_alloc_s_max_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.alloc_s_size]
+  mov rsi, [statistics + ebx + stats.alloc_s_size]
   mov edi, stats_alloc_s_size_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.allocated]
+  mov rsi, [statistics + ebx + stats.allocated]
   add [rsp + stats.allocated], rsi
   mov edi, stats_allocated_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.alloc_others]
-  add [rsp + stats.alloc_others], rsi
-  mov edi, stats_alloc_others_fmtstr
+  mov rsi, [statistics + ebx + stats.alloc_orphans]
+  add [rsp + stats.alloc_orphans], rsi
+  mov edi, stats_alloc_orphans_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.freed]
+  mov rsi, [statistics + ebx + stats.freed]
   add [rsp + stats.freed], rsi
   mov edi, stats_freed_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.freed_others]
-  add [rsp + stats.freed_others], rsi
-  mov edi, stats_freed_others_fmtstr
+  mov rsi, [statistics + ebx + stats.freed_orphans]
+  add [rsp + stats.freed_orphans], rsi
+  mov edi, stats_freed_orphans_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [ts_stats + ebx + stats.mmap]
+  mov rsi, [statistics + ebx + stats.mmap]
   add [rsp + stats.mmap], rsi
   mov edi, stats_mmap_fmtstr
   mov eax, 0
   call printf
 
   mov eax, mmap_tasks * task_size / 1024
-  mov rsi, [ts_stats + ebx + stats.mmap]
+  mov rsi, [statistics + ebx + stats.mmap]
   mul rsi
   mov rsi, rdx
   mov rdx, rax
@@ -559,8 +556,8 @@ proc print_stats:
   mov eax, 0
   call printf
 
-  mov rsi, [rsp + stats.alloc_others]
-  mov edi, stats_alloc_others_fmtstr
+  mov rsi, [rsp + stats.alloc_orphans]
+  mov edi, stats_alloc_orphans_fmtstr
   mov eax, 0
   call printf
 
@@ -569,17 +566,17 @@ proc print_stats:
   mov eax, 0
   call printf
 
-  mov rsi, [rsp + stats.freed_others]
-  mov edi, stats_freed_others_fmtstr
+  mov rsi, [rsp + stats.freed_orphans]
+  mov edi, stats_freed_orphans_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [t0_stats + stats.used_max]
+  mov rsi, [statistics + 0 + stats.used_max]
   mov edi, stats_used_max_fmtstr
   mov eax, 0
   call printf
 
-  mov rsi, [t0_stats + stats.in_use]
+  mov rsi, [statistics + 0 + stats.in_use]
   mov edi, stats_in_use_fmtstr
   mov eax, 0
   call printf
@@ -608,32 +605,24 @@ proc print_stats:
 
 section .data  align=128
 
-; Strucs are aligned at 128-byte boundary because this makes the processor bus
-; locking used for atomic operations more efficient.  It also makes the needed
-; 8-byte alignment for atomic field access.  _start and statistics collection
-; also take advantage of it.
+; Variables and strucs are aligned at 128-byte boundary because this improves
+; cache-coherency performance, and because this improves the performance of
+; processor bus locking used for atomic operations.  It also makes the needed
+; 8-byte alignment for atomic field access.
 
 
 ; Threads' executable-tasks stacks.
 
-ts_exec_ss:
+executables:
 
 %assign n 0
 %rep amount_threads
 
-t%[n]_exec_s:
-
-%assign n  (n + 1) % amount_threads  ; Last's .next = first.
-
-  istruc stack
-    at stack.head,          dq 0
-    at stack.next,          dq t%[n]_exec_s
-    at stack.need,          dq 0
-    at stack.others_freed,  dq 0  ; Not used.
-  iend
-
+executables_%[n]:
+dq 0
 align 128, db 0
 
+%assign n  n + 1
 %endrep
 
 
@@ -641,20 +630,30 @@ align 128, db 0
 
 ; Threads' private allocatable-tasks stacks.
 
-ts_alloc_ss:
+allocatables:
 
 %assign n 0
 %rep amount_threads
 
-t%[n]_alloc_s:
+allocatables_%[n]:
+dq allocatables_%[n]_head
+align 128, db 0
 
-  istruc stack
-    at stack.head,          dq t%[n]_alloc_s_head
-    at stack.next,          dq 0  ; Not used.
-    at stack.need,          dq 0  ; Not used.
-    at stack.others_freed,  dq t%[n]_others_freed_ss
-  iend
+%assign n  n + 1
+%endrep
 
+
+
+
+; Threads' variables for indicating they need a task and for receiving a task.
+
+needy:
+
+%assign n 0
+%rep amount_threads
+
+needy_%[n]:
+dq 0
 align 128, db 0
 
 %assign n  n + 1
@@ -664,28 +663,20 @@ align 128, db 0
 
 
 ; Threads' arrays of stacks for other threads to free strucs to each other.
-
-ts_others_freed_ass:
-
 ; Note that this grows exponentially as the square of amount_threads.
+
+orphans:
 
 %assign n 0
 %rep amount_threads
 
-t%[n]_others_freed_ss:
+orphans_%[n]:
 
 %assign a 0
 %rep amount_threads
 
-t%[n]_others_freed_s%[a]:
-
-  istruc stack
-    at stack.head,          dq 0
-    at stack.next,          dq 0  ; Not used.
-    at stack.need,          dq 0  ; Not used.
-    at stack.others_freed,  dq 0  ; Not used.
-  iend
-
+orphans_%[n]_%[a]:
+dq 0
 align 128, db 0
 
 %assign a  a + 1
@@ -704,11 +695,12 @@ align 128, db 0
 %assign n 0
 %rep amount_threads
 
-t%[n]_alloc_s_head:
+allocatables_%[n]_head:
 
   istruc task
-    at task.next,    dq t%[n]_alloc_s_1
-    at task.owner,   dq t%[n]_alloc_s
+    at task.next,    dq allocatables_%[n]_1
+    at task.owner,   dd n << 7
+                     dd orphans_%[n]
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -726,14 +718,15 @@ t%[n]_alloc_s_head:
   iend
 
 
-t%[n]_alloc_s_1:
+allocatables_%[n]_1:
 
 %assign a 2
 %rep statically_allocated_free_tasks - 2
 
   istruc task
-    at task.next,    dq t%[n]_alloc_s_%[a]
-    at task.owner,   dq t%[n]_alloc_s
+    at task.next,    dq allocatables_%[n]_%[a]
+    at task.owner,   dd n << 7
+                     dd orphans_%[n]
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -750,7 +743,7 @@ t%[n]_alloc_s_1:
     at task.arg10,   dq 0
   iend
 
-t%[n]_alloc_s_%[a]:
+allocatables_%[n]_%[a]:
 
 %assign a  a + 1
 %endrep
@@ -758,7 +751,8 @@ t%[n]_alloc_s_%[a]:
 
   istruc task
     at task.next,    dq 0
-    at task.owner,   dq t%[n]_alloc_s
+    at task.owner,   dd n << 7
+                     dd orphans_%[n]
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -783,7 +777,7 @@ t%[n]_alloc_s_%[a]:
 
 %ifdef statistics_collection
 
-ts_stats:
+statistics:
 
 %rep amount_threads
 
@@ -798,9 +792,9 @@ ts_stats:
     at stats.alloc_s_max,    dq statically_allocated_free_tasks
     at stats.alloc_s_size,   dq statically_allocated_free_tasks
     at stats.allocated,      dq 0
-    at stats.alloc_others,   dq 0
+    at stats.alloc_orphans,  dq 0
     at stats.freed,          dq 0
-    at stats.freed_others,   dq 0
+    at stats.freed_orphans,  dq 0
     at stats.used_max,       dq 0
     at stats.in_use,         dq 0
     at stats.mmap,           dq 0
@@ -821,9 +815,9 @@ stats_sched_mine_fmtstr:     db `  sched mine:    %15llu\n`,0
 stats_alloc_s_max_fmtstr:    db `  alloc_s max:   %15llu\n`,0
 stats_alloc_s_size_fmtstr:   db `  alloc_s size:  %15llu\n`,0
 stats_allocated_fmtstr:      db `  allocated:     %15llu\n`,0
-stats_alloc_others_fmtstr:   db `  alloc others:  %15llu\n`,0
+stats_alloc_orphans_fmtstr:  db `  alloc orphans: %15llu\n`,0
 stats_freed_fmtstr:          db `  freed:         %15llu\n`,0
-stats_freed_others_fmtstr:   db `  freed others:  %15llu\n`,0
+stats_freed_orphans_fmtstr:  db `  freed orphans: %15llu\n`,0
 stats_used_max_fmtstr:       db `  used max:      %15llu\n`,0
 stats_in_use_fmtstr:         db `  in use:        %15llu\n`,0
 stats_mmap_fmtstr:           db `  mmaps:         %15llu\n`,0

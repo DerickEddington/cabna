@@ -1,6 +1,6 @@
 ;--- User may modify these. ----------------------------------------------------
 
-%assign amount_threads 2
+%assign amount_threads 4
 
 ; The size of a thread's stack, except the initial thread's.
 %assign call_stack_size 4 * 4096
@@ -18,9 +18,9 @@
 
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
-%define exec_s_r15    r15   ; A thread's executable-tasks stack (upper 32 bits).
-%define alloc_s_r15d  r15d  ; A thread's allocatable-tasks stack (lower 32 bits).
-%define cet_r14       r14   ; A thread's currently executing task.
+%define orphans_tid_r15  r15   ; A thread's orphans pointer (upper 32 bits).
+%define tid_r15d         r15d  ; A thread's variables' offset (lower 32 bits).
+%define cet_r14          r14   ; A thread's currently executing task.
 
 
 ; Procedure call arguments, including return-instruction continuation.
@@ -66,15 +66,15 @@
 
 
 ; Instances of all the below struc types must be aligned at 8-byte boundary, so
-; that loads and stores of the fields are atomic.  Instances of task and stack
-; strucs must be aligned at 128-byte boundary, for processor bus locking
-; efficiency.  Those statically allocated in the .data section are properly
-; aligned, because the section is specified to be aligned at 128-byte and the
-; strucs are specified to be aligned at 128-byte.  Because all the strucs have
-; qword fields, this preserves the correct 8-byte alignment.  Because task
-; strucs are 128 bytes long, this preserves the correct 128-byte alignment when
-; they are located contiguously.  Task strucs dynamically allocated by mmap are
-; properly aligned, because mmap allocates pages on page boundary.
+; that loads and stores of the fields are atomic.  Instances of task strucs must
+; be aligned at 128-byte boundary, for processor bus locking efficiency.  Those
+; statically allocated in the .data section are properly aligned, because the
+; section is specified to be aligned at 128-byte and the strucs are specified to
+; be aligned at 128-byte.  Because all the strucs have qword fields, this
+; preserves the correct 8-byte alignment.  Because task strucs are 128 bytes
+; long, this preserves the correct 128-byte alignment when they are located
+; contiguously.  Task strucs dynamically allocated by mmap are properly aligned,
+; because mmap allocates pages on page boundary.
 
 ; TODO?: The .need field could be the lower bits of the .next field, and the
 ; .ridx field could be the lower bits of the .rcvr field, because the .next and
@@ -110,26 +110,6 @@ endstruc
 %endif
 
 
-; For executable-tasks stacks, a struc's .next field is not changed once
-; initialized, which allows concurrent reading of it without locking.  For
-; allocatable-tasks stacks, concurrent access doesn't occur, and the .next field
-; is never used.  The .need field is used only for executable-tasks stacks, with
-; a special protocol for concurrent access.  The .others_freed field is used
-; only for allocatable-tasks stacks, with a special protocol for concurrent
-; access.
-
-struc stack
-  .head:          resq 1
-  .next:          resq 1
-  .need:          resq 1
-  .others_freed:  resq 1
-endstruc
-
-%if stack_size > 128
-  %error "Stack size " stack_size " greater than 128."
-%endif
-
-
 
 
 %ifdef statistics_collection
@@ -145,9 +125,9 @@ struc stats
   .alloc_s_max:    resq 1
   .alloc_s_size:   resq 1
   .allocated:      resq 1
-  .alloc_others:   resq 1
+  .alloc_orphans:  resq 1
   .freed:          resq 1
-  .freed_others:   resq 1
+  .freed_orphans:  resq 1
   .used_max:       resq 1  ; Only thread-0's used.
   .in_use:         resq 1  ; Only thread-0's used.
   .mmap:           resq 1
@@ -156,9 +136,6 @@ endstruc
 %if stats_size > 128
   %error "Stats size " stats_size " greater than 128."
 %endif
-
-%define t_stats  ts_stats + alloc_s_r15d - ts_alloc_ss
-%define t0_stats ts_stats
 
 %macro stat 1+
   %1
@@ -176,6 +153,10 @@ endstruc
 
 %if amount_threads < 1
   %fatal "amount_threads, " amount_threads ", less than 1."
+%endif
+
+%if amount_threads > 0xFFFFFFFF
+  %error "amount_threads, " amount_threads ", greater than 32-bits max."
 %endif
 
 %if call_stack_size < 16 * 1024
