@@ -200,7 +200,7 @@ proc sched_task:
   ; Push a task in the thread's executable-tasks stack, or if the stack already
   ; has at least one task and another thread needs a task, give the task to the
   ; needy thread.  Argument in arg1_rdi, and return to ret_rsi.
-  ; Used registers: rax, rdx, rsi, rdi.
+  ; Used registers: rax, rsi, rdi.
 
   stat add qword [statistics + tid_r15d + stats.sched_calls], 1
 
@@ -292,7 +292,7 @@ proc exec_avail:
   ; Pop a task from the thread's executable-tasks stack, or indicate that the
   ; thread needs a task and wait for one, then execute the task with cet_r14 set
   ; to the task.
-  ; Used registers: rax, rdx, r14
+  ; Used registers: rax, r14.
 
   stat add qword [statistics + tid_r15d + stats.execute_calls], 1
 

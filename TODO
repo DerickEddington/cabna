@@ -1,6 +1,3 @@
-Change sched_task to give the task to a needy thread regardless of whether the
-executing thread's stack is empty.
-
 Investigate having a "thread" struc which defines the variables used by threads,
 instead of using thread-specific offsets from global symbols.  This will place a
 thread's variables closer, which might improve processor caching.  As long as it
@@ -24,6 +21,10 @@ indicates what thread needs a task.  Needy threads compete for setting the field
 to indicate themselves.  Each thread has a field for receiving a gifted task.
 After a thread sets the needy field, it waits for a pointer to appear in its
 gift field.
+
+Investigate a way to change sched_task to give the task to a needy thread
+regardless of whether the executing thread's stack is empty, without degrading
+performance.
 
 Investigate if there's a point where multi-processor Cabna fibonacci is faster
 than single-processor Ikarus fibonacci.
