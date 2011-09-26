@@ -79,19 +79,12 @@ proc alloc_task:
   jmp_ind ret_rsi
 
 .orphans:
-  mov rdx, orphans_tid_r15
-  shr rdx, 32  ; The 32-bit pointer to the thread's orphans stacks.
-  mov ecx, amount_threads * 128
-.orphans_from:
-  sub ecx, 128
-  jc .get_new_space  ; None from other threads.
-  mov rax, [edx + ecx]
+  mov rax, [orphans + tid_r15d]
   test rax, rax
-  jz .orphans_from
+  jz .get_new_space
+  ; The field will still be non-null if another thread changes it.
   ; arg1_rdi already null.
-  xchg [edx + ecx], arg1_rdi  ; Locking automatically done for xchg.
-  ; test arg1_rdi, arg1_rdi  ; Not necessary.
-  ; jz .orphans_from
+  xchg [orphans + tid_r15d], arg1_rdi  ; Locking automatically done for xchg.
 %ifdef statistics_collection
   mov rax, arg1_rdi
   xor ecx, ecx
@@ -139,13 +132,13 @@ proc alloc_task:
 
   ; Reserve first struc for return value.
   mov arg1_rdi, rax
-  mov [rax + task.owner], orphans_tid_r15
+  mov [rax + task.owner], tid_r15d
   ; Divide remaining space into task strucs, and link together.
   add rax, rsi  ; End of the space.
   sub rax, task_size  ; Tail struc is the last block.
   xor edx, edx
 .divide_and_link:
-  mov [rax + task.owner], orphans_tid_r15
+  mov [rax + task.owner], tid_r15d
   mov [rax + task.next], rdx
   mov rdx, rax
   sub rax, task_size
@@ -252,9 +245,9 @@ proc free_pet__exec_avail:
   stat lock sub qword [statistics + 0 + stats.in_use], 1
   stat add qword [statistics + tid_r15d + stats.freed], 1
 
-  mov rax, [cet_r14 + task.owner]
-  cmp eax, tid_r15d
-  jne .not_mine
+  mov edx, [cet_r14 + task.owner]
+  cmp edx, tid_r15d
+  jne .orphan
 
   mov rax, [allocatables + tid_r15d]
   mov [cet_r14 + task.next], rax
@@ -272,15 +265,12 @@ proc free_pet__exec_avail:
 
   jmp exec_avail
 
-.not_mine:
-  ; Compute the stack for this thread to give freed strucs to the owner.
-  shr rax, 32
-  mov edx, eax
-  mov rax, [edx + tid_r15d]
+.orphan:
+  mov rax, [orphans + edx]
 .retry:
-  ; pause  ; TODO: Good? Only loops at most once.
+  ; pause  ; TODO: Good?
   mov [cet_r14 + task.next], rax
-  lock cmpxchg [edx + tid_r15d], cet_r14
+  lock cmpxchg [orphans + edx], cet_r14
   jne .retry
   stat add qword [statistics + tid_r15d + stats.freed_orphans], 1
   jmp exec_avail
@@ -368,15 +358,10 @@ proc _start:
   jnz .loop  ; Caller of clone jumps.  New threads don't.
 
 .done:
-  ; Set the threads' ID-offset / orphans register.
-  ; Multiply thread ID by the size of a thread's orphans array.
-  mov eax, amount_threads * 128
-  mul rbx  ; (High-order bits of product, in rdx, are always zero.)
-  lea r15d, [orphans + rax]
-  shl r15, 32  ; It lives in the high 32 bits.
+  ; Set the threads' ID-offset register.
   ; Multiply thread ID by 128: the offset of a thread's variables.
-  shl ebx, 7
-  or r15, rbx  ; It lives in the low 32 bits.
+  mov tid_r15d, ebx
+  shl tid_r15d, 7
   ; Begin executing the user's program.
   test ebx, ebx
   jz main  ; Initial thread, thread 0, does this.
@@ -611,7 +596,7 @@ section .data  align=128
 ; 8-byte alignment for atomic field access.
 
 
-; Threads' executable-tasks stacks.
+; Threads' private executable-tasks stacks.
 
 executables:
 
@@ -662,8 +647,7 @@ align 128, db 0
 
 
 
-; Threads' arrays of stacks for other threads to free strucs to each other.
-; Note that this grows exponentially as the square of amount_threads.
+; Threads' stacks for other threads to free strucs to each other.
 
 orphans:
 
@@ -671,16 +655,8 @@ orphans:
 %rep amount_threads
 
 orphans_%[n]:
-
-%assign a 0
-%rep amount_threads
-
-orphans_%[n]_%[a]:
 dq 0
 align 128, db 0
-
-%assign a  a + 1
-%endrep
 
 %assign n  n + 1
 %endrep
@@ -699,8 +675,7 @@ allocatables_%[n]_head:
 
   istruc task
     at task.next,    dq allocatables_%[n]_1
-    at task.owner,   dd n << 7
-                     dd orphans_%[n]
+    at task.owner,   dq n << 7
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -725,8 +700,7 @@ allocatables_%[n]_1:
 
   istruc task
     at task.next,    dq allocatables_%[n]_%[a]
-    at task.owner,   dd n << 7
-                     dd orphans_%[n]
+    at task.owner,   dq n << 7
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0
@@ -751,8 +725,7 @@ allocatables_%[n]_%[a]:
 
   istruc task
     at task.next,    dq 0
-    at task.owner,   dd n << 7
-                     dd orphans_%[n]
+    at task.owner,   dq n << 7
     at task.rcvr,    dq 0
     at task.ridx,    dq 0
     at task.need,    dq 0

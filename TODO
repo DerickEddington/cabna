@@ -9,13 +9,6 @@ donate an executable-task to another thread instead of giving it in .needy.  The
 giver atomically clears .needy, and the waiting thread waits on .given.  Does
 this result in better cache behavior?
 
-Investigate changing others_freed so that each thread only has one stack for
-others to free to, instead of each thread having stacks for all other threads.
-This will make the .data section size proportionate to the amount of threads,
-instead of to the square of the amount of threads.  How does this affect
-performance?  It seems unlikely that exclusion will happen much more or that the
-spin-loop will last longer.
-
 Investigate redesigning task giving so that there's only one global field that
 indicates what thread needs a task.  Needy threads compete for setting the field
 to indicate themselves.  Each thread has a field for receiving a gifted task.

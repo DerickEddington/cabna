@@ -18,7 +18,6 @@
 
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
-%define orphans_tid_r15  r15   ; A thread's orphans pointer (upper 32 bits).
 %define tid_r15d         r15d  ; A thread's variables' offset (lower 32 bits).
 %define cet_r14          r14   ; A thread's currently executing task.
 
@@ -86,9 +85,9 @@
 
 struc task
   .next:    resq 1
-  .owner:   resq 1
+  .owner:   resq 1  ; Only low 32 bits used.
   .rcvr:    resq 1
-  .ridx:    resq 1
+  .ridx:    resq 1  ; Only low 32 bits used.
   .need:    resq 1  ; Updated atomically.  Only low 32 bits used.
   .exec:    resq 1
   .arg1:    resq 1
