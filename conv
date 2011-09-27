@@ -19,6 +19,7 @@
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
 %define tid_r15d         r15d  ; A thread's variables' offset (lower 32 bits).
+%define needy_tid_r15    r15   ; Bit 32 used for indicating needyness.
 %define cet_r14          r14   ; A thread's currently executing task.
 
 

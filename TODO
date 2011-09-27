@@ -3,17 +3,8 @@ instead of using thread-specific offsets from global symbols.  This will place a
 thread's variables closer, which might improve processor caching.  As long as it
 doesn't degrade caching, it seems a cleaner way.  128-byte alignment still
 necessary for some variables, for bus-locking and to avoid false sharing.
-
-Investigate having, in addition to .needy, a .given variable where thread's
-donate an executable-task to another thread instead of giving it in .needy.  The
-giver atomically clears .needy, and the waiting thread waits on .given.  Does
-this result in better cache behavior?
-
-Investigate redesigning task giving so that there's only one global field that
-indicates what thread needs a task.  Needy threads compete for setting the field
-to indicate themselves.  Each thread has a field for receiving a gifted task.
-After a thread sets the needy field, it waits for a pointer to appear in its
-gift field.
+Accessing the needy variable will change to 32-bit because r15d will never be
+zero because it points to thread strucs.
 
 Investigate a way to change sched_task to give the task to a needy thread
 regardless of whether the executing thread's stack is empty, without degrading
@@ -30,7 +21,8 @@ Rename conv file to ?
 Fix preprocessor error messages so the values, not symbols, are printed.
 
 Is (un)likely actually a good idea?  Maybe not portable to other processors.
-Seems to screw up objdump disassembly.  Review performance difference again.
+Seems to screw up objdump disassembly.  Review places to use and performance
+difference again.
 
 Determine the stack size given to the initial thread.  Decide what size to give
 other threads.  Minimum is 16384 (16 kb, 4 pages).

@@ -191,9 +191,9 @@ proc supply_retval:
 
 proc sched_task:
   ; Push a task in the thread's executable-tasks stack, or if the stack already
-  ; has at least one task and another thread needs a task, give the task to the
-  ; needy thread.  Argument in arg1_rdi, and return to ret_rsi.
-  ; Used registers: rax, rsi, rdi.
+  ; has at least one task and another thread needs a task, try to give the task
+  ; to the needy thread.  Argument in arg1_rdi, and return to ret_rsi.
+  ; Used registers: rax, rdx, rsi, rdi.
 
   stat add qword [statistics + tid_r15d + stats.sched_calls], 1
 
@@ -202,23 +202,14 @@ proc sched_task:
   jz .in_mine_empty
 
   ; Check if another thread needs a task.
-  mov eax, amount_threads * 128
-.another:
-  sub eax, 128
-  jc .in_mine  ; Didn't find a needy thread.
-  bt dword [needy + eax], 0
-  jnc .another
-  lock btr dword [needy + eax], 0
-  jnc .another
-  mov [needy + eax], arg1_rdi
-  jmp_ind ret_rsi
+  mov rdx, [needy]
+  test rdx, rdx
+  jnz .give
 
 .in_mine:
-  mov rax, [executables + tid_r15d]
   mov [arg1_rdi + task.next], rax
 .in_mine_empty:
   mov [executables + tid_r15d], arg1_rdi
-
 %ifdef statistics_collection
   add qword [statistics + tid_r15d + stats.sched_mine], 1
   mov rax, [statistics + tid_r15d + stats.exec_s_size]
@@ -229,7 +220,14 @@ proc sched_task:
   mov [statistics + tid_r15d + stats.exec_s_max], rax
 .not_max:
 %endif
+  jmp_ind ret_rsi
 
+.give:
+  xor edx, edx
+  xchg [needy], rdx  ; Locking automatically done for xchg.
+  test rdx, rdx
+  unlikely jz .in_mine
+  mov [gifts + edx], arg1_rdi
   jmp_ind ret_rsi
 
 
@@ -268,7 +266,7 @@ proc free_pet__exec_avail:
 .orphan:
   mov rax, [orphans + edx]
 .retry:
-  ; pause  ; TODO: Good?
+  ; pause  ; Not needed, I think, because the lock cmpxchg is always done.
   mov [cet_r14 + task.next], rax
   lock cmpxchg [orphans + edx], cet_r14
   jne .retry
@@ -303,13 +301,19 @@ proc exec_avail:
   jmp_ind [cet_r14 + task.exec]
 
 .empty:
-  mov qword [needy + tid_r15d], 1
-  stat add qword [statistics + tid_r15d + stats.needy], 1
+  pause
+  mov rax, [needy]
+  test rax, rax
+  unlikely jnz .empty
+  lock cmpxchg [needy], needy_tid_r15
+  unlikely jne .empty
 .wait:
-  pause  ; Doesn't seem to affect speed. Hopefully reduces power consumption.
-  mov cet_r14, [needy + tid_r15d]
-  test cet_r14, -2
+  pause
+  mov cet_r14, [gifts + tid_r15d]
+  test cet_r14, cet_r14
   jz .wait
+  mov [gifts + tid_r15d], rax  ; rax is null.
+  stat add qword [statistics + tid_r15d + stats.needy], 1
   ; Execute the task's instructions.  Tasks are responsible for giving control
   ; back to exec_evail.
   jmp_ind [cet_r14 + task.exec]
@@ -359,9 +363,11 @@ proc _start:
 
 .done:
   ; Set the threads' ID-offset register.
+  ; Set bit 32 for indicating needyness.
+  mov needy_tid_r15, 1 << 32
   ; Multiply thread ID by 128: the offset of a thread's variables.
-  mov tid_r15d, ebx
-  shl tid_r15d, 7
+  shl ebx, 7
+  or needy_tid_r15, rbx
   ; Begin executing the user's program.
   test ebx, ebx
   jz main  ; Initial thread, thread 0, does this.
@@ -630,14 +636,23 @@ align 128, db 0
 
 
 
-; Threads' variables for indicating they need a task and for receiving a task.
+; The global variable for indicating what thread needs a task.
 
 needy:
+dq 0
+align 128, db 0
+
+
+
+
+; Threads' variables for receiving executable tasks given from other threads.
+
+gifts:
 
 %assign n 0
 %rep amount_threads
 
-needy_%[n]:
+gifts_%[n]:
 dq 0
 align 128, db 0
 
