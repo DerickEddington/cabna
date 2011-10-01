@@ -30,7 +30,8 @@ proc main:  ; (done (summation 1 count))
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], summation
   mov qword [arg1_rdi + task.arg1], 1
-  mov qword [arg1_rdi + task.arg2], count
+  mov rax, count
+  mov qword [arg1_rdi + task.arg2], rax
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
   jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set

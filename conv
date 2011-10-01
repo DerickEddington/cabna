@@ -18,9 +18,8 @@
 
 ; These registers are reserved for the runtime system and must not be mutated by
 ; users.
-%define tid_r15d         r15d  ; A thread's variables' offset (lower 32 bits).
-%define needy_tid_r15    r15   ; Bit 32 used for indicating needyness.
-%define cet_r14          r14   ; A thread's currently executing task.
+%define tds_r15d  r15d  ; A thread's data struc (lower 32 bits).
+%define cet_r14   r14   ; A thread's currently executing task.
 
 
 ; Procedure call arguments, including return-instruction continuation.
@@ -112,30 +111,46 @@ endstruc
 
 
 
-%ifdef statistics_collection
+; Instances of thread strucs, and some of the fields, must be aligned at
+; 128-byte boundary, for cache-coherency performance and for processor bus
+; locking efficiency.  The .executables and .allocatables fields are private to
+; a thread and not shared, so they are aligned in a cache line for both that is
+; never affected by other threads.  The .gift and .orphans fields are shared and
+; accessed by potentially every thread, so they are aligned in their own cache
+; lines so that accessing them does not affect the cache lines of other fields
+; (i.e. false sharing is avoided).  The statistics fields are private and are
+; aligned so they are not in the same cache line as the orphans field.
 
-struc stats
+struc thread
+  .executables:    resq 1
+  .allocatables:   resq 1
+  alignb 128
+  .gift:           resq 1
+  alignb 128
+  .orphans:        resq 1
+%ifdef statistics_collection
+  alignb 128
   .exec_s_max:     resq 1
   .exec_s_size:    resq 1
   .execute_calls:  resq 1
   .executed_mine:  resq 1
-  .needy           resq 1
+  .needy:          resq 1
   .sched_calls:    resq 1
   .sched_mine:     resq 1
   .alloc_s_max:    resq 1
   .alloc_s_size:   resq 1
-  .allocated:      resq 1
+  .allocate_calls: resq 1
   .alloc_orphans:  resq 1
   .freed:          resq 1
   .freed_orphans:  resq 1
-  .used_max:       resq 1  ; Only thread-0's used.
-  .in_use:         resq 1  ; Only thread-0's used.
   .mmap:           resq 1
+%endif
 endstruc
 
-%if stats_size > 128
-  %error "Stats size " stats_size " greater than 128."
-%endif
+
+
+
+%ifdef statistics_collection
 
 %macro stat 1+
   %1
@@ -153,10 +168,6 @@ endstruc
 
 %if amount_threads < 1
   %fatal "amount_threads, " amount_threads ", less than 1."
-%endif
-
-%if amount_threads > 0xFFFFFFFF
-  %error "amount_threads, " amount_threads ", greater than 32-bits max."
 %endif
 
 %if call_stack_size < 16 * 1024
