@@ -15,6 +15,6 @@ bug:
   mov eax, 1  ; write syscall number
   syscall
 
-  mov edi, 7   ; exit code
-  mov eax, 60  ; exit syscall number
+  mov edi, 7    ; exit code
+  mov eax, 231  ; exit_group syscall number
   syscall

@@ -8,6 +8,7 @@ default rel
 global _start
 global alloc_task
 global sched_task
+global notify_receiver
 global supply_retval
 global exec_avail
 global free_pet__exec_avail
@@ -157,6 +158,26 @@ proc alloc_task:
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
   jmp bug
+
+
+
+
+proc notify_receiver:
+  ; Notify the currently executing task's waiting receiver task that one of its
+  ; tasks finished.  If the receiver task gets its final notice, schedule the
+  ; task for execution.  Return to ret_rsi.
+  ; Used registers: rsi, rdi.
+
+  ; No other threads will access our currently executing task struc, so we can
+  ; access it without concurrency concern.
+  mov rdi, [cet_r14 + task.rcvr]
+  ; Other threads will access the .need field, so we must atomically decrement
+  ; it.
+  lock sub dword [rdi + task.need], 1  ; 32-bit alright.
+  ; Supplied the final needed argument to rcvr, so schedule rcvr for execution.
+  jz sched_task  ; arg1_rdi and ret_rsi are already set.
+  ; Receiver needs more.
+  jmp_ind ret_rsi
 
 
 

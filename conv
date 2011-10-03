@@ -6,7 +6,7 @@
 %assign call_stack_size 4 * 4096
 
 ; The amount of pre-allocated free task strucs per thread.
-%assign statically_allocated_free_tasks 64
+%assign statically_allocated_free_tasks 128  ; 16 KB
 
 ; The amount of task strucs to allocate per mmap, per thread, when more are
 ; needed.
