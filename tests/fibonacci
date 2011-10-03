@@ -4,7 +4,7 @@ extern dprintf
 
 %include "cabna/iface"
 
-%assign count 37
+%assign count 43
 
 
 section .data

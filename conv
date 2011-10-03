@@ -12,7 +12,7 @@
 ; needed.
 %assign mmap_tasks 2048  ; 256 KB
 
-%define statistics_collection
+;%define statistics_collection
 
 ;--- Internal. Do not modify. --------------------------------------------------
 
