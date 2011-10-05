@@ -16,6 +16,8 @@ section .data
 section .text
 
 proc main:
+  main_race
+
   mov esi, 2  ; O_RDWR
   mov edi, file_name
   mov eax, 2  ; open syscall number.
@@ -118,9 +120,9 @@ proc quicksort:
   mov qword [cet_r14 + task.exec], join
   mov dword [cet_r14 + task.need], 0
 
-  mov rax, l
-  sub rax, s
-  cmp rax, 2 * 8
+  mov v, l
+  sub v, s
+  cmp v, 2 * 8
   jb .maybe_right
 
   add dword [cet_r14 + task.need], 1
@@ -134,9 +136,9 @@ proc quicksort:
 
 .maybe_right:
   add l, 8
-  mov rax, e
-  sub rax, l
-  cmp rax, 2 * 8
+  mov v, e
+  sub v, l
+  cmp v, 2 * 8
   jb .check
 
   add dword [cet_r14 + task.need], 1

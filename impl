@@ -12,6 +12,7 @@ global notify_receiver
 global supply_retval
 global exec_avail
 global free_pet__exec_avail
+global main_semaphore
 
 %ifdef statistics_collection
 global print_stats
@@ -387,9 +388,9 @@ proc _start:
   jc .too_many_threads
   mov tds_r15d, eax
   ; Begin executing the user's program.
-  test ebx, ebx
-  jz main  ; Initial thread, thread 0, does this.
-  jmp exec_avail  ; Other threads do this.  TODO?: Delay a bit first?
+  mov edi, ebx  ; Thread ID is the argument to main.
+  jmp main
+  ; TODO?: Call main and after do exit syscall?
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
@@ -634,8 +635,7 @@ section .data  align=128
 
 ; The global variable for indicating what thread needs a task.
 
-needy:
-dd 0
+needy: dd 0
 align 128, db 0
 
 
@@ -767,9 +767,16 @@ allocatables_%[n]_%[a]:
 
 
 
+; The semaphore used by the main_race macro.
+
+main_semaphore: dd 1
+
+
+
+
 %ifdef statistics_collection
 
-; align 128, db 0  ; Not necessary because already aligned.
+align 128, db 0
 
 used_max:  dq 0
 in_use:    dq 0

@@ -1,5 +1,3 @@
-Investigate making some "thread_main" hook that is the first thing threads do.
-
 Investigate a more efficient way, instead of
   jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
 jump straight to task.exec.  Does this make gifting tasks, regardless if

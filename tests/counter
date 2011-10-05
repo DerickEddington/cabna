@@ -9,6 +9,8 @@ section .text
 
 
 proc main:  ; (done (a n))
+  main_race
+
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], done
   mov qword [arg1_rdi + task.need], 1

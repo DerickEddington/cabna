@@ -6,7 +6,23 @@ extern notify_receiver
 extern supply_retval
 extern exec_avail
 extern free_pet__exec_avail
+extern main_semaphore
 
 %ifdef statistics_collection
 extern print_stats
 %endif
+
+
+%macro main_race 1
+  mov eax, [main_semaphore]
+  test eax, eax
+  jz %1
+  xor eax, eax
+  xchg [main_semaphore], eax  ; Locking automatically done for xchg.
+  test eax, eax
+  jz %1
+%endmacro
+
+%macro main_race 0
+  main_race exec_avail
+%endmacro

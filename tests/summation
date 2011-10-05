@@ -15,6 +15,8 @@ section .data
 section .text
 
 proc main:  ; (done (summation 1 count))
+  main_race
+
   mov rcx, count
   mov edx, 1
   mov esi, fmtstr1
