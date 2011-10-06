@@ -11,7 +11,7 @@ global sched_task
 global notify_receiver
 global supply_retval
 global exec_avail
-global free_pet__exec_avail
+global free_pet
 global main_semaphore
 
 %ifdef statistics_collection
@@ -252,11 +252,11 @@ proc sched_task:
 
 
 
-proc free_pet__exec_avail:
+proc free_pet:
   ; Free the previously executing task by pushing it in the thread's private
   ; allocatable-tasks stack; or if the struc belongs to another thread, give it
-  ; to the owner; and continue into exec_avail.
-  ; Used registers: rax, rdx, and those of exec_avail.
+  ; to the owner; and return to ret_rsi.
+  ; Used registers: rax, rdx, rsi.
 
   stat lock sub qword [in_use], 1
   stat add qword [tds_r15d + thread.freed], 1
@@ -279,7 +279,7 @@ proc free_pet__exec_avail:
 .not_max:
 %endif
 
-  jmp exec_avail
+  jmp_ind ret_rsi
 
 .orphan:
   mov rax, [edx + thread.orphans]
@@ -289,7 +289,7 @@ proc free_pet__exec_avail:
   lock cmpxchg [edx + thread.orphans], cet_r14
   jne .retry
   stat add qword [tds_r15d + thread.freed_orphans], 1
-  jmp exec_avail
+  jmp_ind ret_rsi
 
 
 

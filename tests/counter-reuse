@@ -21,7 +21,8 @@ proc main:  ; (done (a n))
   mov qword [arg1_rdi + task.arg1], count
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp a
 
 
 proc done:  ; Exit program.
@@ -34,29 +35,29 @@ proc done:  ; Exit program.
 
 ; (define (a n) (b (- n 1)))
 proc a:
-  mov arg1_rdi, cet_r14
-  sub qword [arg1_rdi + task.arg1], 1
-  mov qword [arg1_rdi + task.exec], b
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  sub qword [cet_r14 + task.arg1], 1
+  mov qword [cet_r14 + task.exec], b
+  jmp b
 
 
 
 ; (define (b n) (c (- n 2)))
 proc b:
-  mov arg1_rdi, cet_r14
-  sub qword [arg1_rdi + task.arg1], 2
-  mov qword [arg1_rdi + task.exec], c
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  sub qword [cet_r14 + task.arg1], 2
+  mov qword [cet_r14 + task.exec], c
+  jmp c
 
 
 
 ; (define (c n) (if (<= n 0) n (a n)))
 proc c:
-  mov arg1_rdi, [cet_r14 + task.arg1]
-  test arg1_rdi, arg1_rdi
-  mov esi, free_pet__exec_avail
-  unlikely jle supply_retval
+  mov rbx, [cet_r14 + task.arg1]
+  test rbx, rbx
+  likely jg .continue
+  mov arg1_rdi, rbx
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail
 
-  mov arg1_rdi, cet_r14
-  mov qword [arg1_rdi + task.exec], a
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+.continue:
+  mov qword [cet_r14 + task.exec], a
+  jmp a

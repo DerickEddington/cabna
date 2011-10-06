@@ -36,7 +36,8 @@ proc main:  ; (done (summation 1 count))
   mov qword [arg1_rdi + task.arg2], rax
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp summation
 
 
 proc done:  ; Print value and exit program.
@@ -65,13 +66,15 @@ proc summation:
 
   sub rbx, arg1_rdi
   jg .continue_1
-  jmp_ret_to supply_retval, free_pet__exec_avail
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail
 
 .continue_1:
   test rbx, -2
   jnz .continue_2
   add arg1_rdi, r13
-  jmp_ret_to supply_retval, free_pet__exec_avail
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail
 
 .continue_2:
   ; Reuse task struc for the tail-call.
@@ -97,7 +100,8 @@ proc summation:
   mov qword [arg1_rdi + task.arg2], r13
   mov [arg1_rdi + task.rcvr], cet_r14
   mov qword [arg1_rdi + task.ridx], 2
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp summation
 
 
 
@@ -105,4 +109,5 @@ proc summation:
 proc addition:
   mov arg1_rdi, [cet_r14 + task.arg1]
   add arg1_rdi, [cet_r14 + task.arg2]
-  jmp_ret_to supply_retval, free_pet__exec_avail
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail

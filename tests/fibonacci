@@ -33,7 +33,8 @@ proc main:  ; (done (fibonacci count))
   mov qword [arg1_rdi + task.arg1], count
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp fibonacci
 
 
 proc done:  ; Print value and exit program.
@@ -86,11 +87,13 @@ proc fibonacci:
   mov qword [arg1_rdi + task.arg1], rbx
   mov [arg1_rdi + task.rcvr], cet_r14
   mov qword [arg1_rdi + task.ridx], 2
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp fibonacci
 
 .return:
   mov arg1_rdi, rbx
-  jmp_ret_to supply_retval, free_pet__exec_avail
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail
 
 
 
@@ -98,4 +101,5 @@ proc fibonacci:
 proc addition:
   mov arg1_rdi, [cet_r14 + task.arg1]
   add arg1_rdi, [cet_r14 + task.arg2]
-  jmp_ret_to supply_retval, free_pet__exec_avail
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail

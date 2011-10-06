@@ -49,7 +49,8 @@ proc main:
   mov [arg1_rdi + task.arg2], rax
   mov [arg1_rdi + task.rcvr], r12
   ; mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp quicksort
 
 .error:
   mov edx, errmsg_size
@@ -120,9 +121,10 @@ proc quicksort:
   mov qword [cet_r14 + task.exec], join
   mov dword [cet_r14 + task.need], 0
 
-  mov v, l
-  sub v, s
-  cmp v, 2 * 8
+  xor edi, edi
+  mov rax, l
+  sub rax, s
+  cmp rax, 2 * 8
   jb .maybe_right
 
   add dword [cet_r14 + task.need], 1
@@ -132,15 +134,19 @@ proc quicksort:
   mov [arg1_rdi + task.arg2], l
   mov [arg1_rdi + task.rcvr], cet_r14
   ; mov qword [arg1_rdi + task.ridx], 1
-  jmp_ret sched_task  ; arg1_rdi already set
 
 .maybe_right:
   add l, 8
-  mov v, e
-  sub v, l
-  cmp v, 2 * 8
-  jb .check
+  mov rax, e
+  sub rax, l
+  cmp rax, 2 * 8
+  jb .no_right
 
+  test arg1_rdi, arg1_rdi
+  jz .yes_right  ; No left.
+  jmp_ret sched_task  ; arg1_rdi set to left.
+
+.yes_right:
   add dword [cet_r14 + task.need], 1
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], quicksort
@@ -148,16 +154,19 @@ proc quicksort:
   mov [arg1_rdi + task.arg2], e
   mov [arg1_rdi + task.rcvr], cet_r14
   ; mov qword [arg1_rdi + task.ridx], 2
-  jmp_ret_to sched_task, exec_avail  ; arg1_rdi already set
+  mov cet_r14, arg1_rdi
+  jmp quicksort
 
-.check:
-  cmp dword [cet_r14 + task.need], 0
-  je join
-  jmp exec_avail
+.no_right:
+  test arg1_rdi, arg1_rdi
+  jz join  ; No left either.
+  mov cet_r14, arg1_rdi  ; Execute left directly.
+  jmp quicksort
 
 
 
 
 proc join:
   ; jmp_ret_to supply_retval, free_pet__exec_avail
-  jmp_ret_to notify_receiver, free_pet__exec_avail
+  jmp_ret notify_receiver
+  jmp_ret_to free_pet, exec_avail

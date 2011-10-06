@@ -5,7 +5,7 @@ extern sched_task
 extern notify_receiver
 extern supply_retval
 extern exec_avail
-extern free_pet__exec_avail
+extern free_pet
 extern main_semaphore
 
 %ifdef statistics_collection
