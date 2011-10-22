@@ -1,8 +1,25 @@
-Investigate if there's a point where multi-processor Cabna fibonacci is faster
-than single-processor Ikarus fibonacci.
+Investigate giving orphans to their owner only when the amount of orphans a
+thread holds reaches a limit.  This will avoid doing as many atomic operations.
+Various options exist: the limit could be per-owner; orphans could be returned
+to their owner in a batch; sorting by owner seems necessary for the previous two
+options.
+
+Investigate redesigning to have a single global executable-tasks data structure,
+using a lock-free non-blocking multi-producer multi-consumer stack/LIFO or
+deque.  Current design is susceptible to not sharing work, because OS scheduling
+can prevent a thread from running and indicating it's needy until too late after
+another thread kept a task, because when the other thread checked to give, the
+needy thread hadn't yet been able to indicate it's needy.  With a global
+multi-access D.S., a needy thread can take an available task whenever it needs.
+
+Investigate making amount_threads a runtime in-memory variable, so that programs
+can divide their work based on the amount of threads, instead of dividing their
+work too much and suffering excess Cabna overhead.
+
+Investigate if changing dword to qword where possible in impl affects
+performance, and about changing 32-bit ops to 64-bit.
 
 Review adding more comments for new designs.
-
 
 Rename conv file to ?
 
@@ -11,6 +28,10 @@ Fix preprocessor error messages so the values, not symbols, are printed.
 Is (un)likely actually a good idea?  Maybe not portable to other processors.
 Seems to screw up objdump disassembly.  Review places to use and performance
 difference again.
+
+Redesign summation and quicksort to use amount_threads to divide
+their work such that it's not divided too much that excess Cabna overhead is
+suffered.  (fibonacci-limited has already been redesigned such.)
 
 Determine the stack size given to the initial thread.  Decide what size to give
 other threads.  Minimum is 16384 (16 kb, 4 pages).

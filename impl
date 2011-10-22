@@ -167,14 +167,14 @@ proc notify_receiver:
   ; Notify the currently executing task's waiting receiver task that one of its
   ; tasks finished.  If the receiver task gets its final notice, schedule the
   ; task for execution.  Return to ret_rsi.
-  ; Used registers: rsi, rdi.
+  ; Used registers: rsi, rdi, and those of sched_task.
 
   ; No other threads will access our currently executing task struc, so we can
   ; access it without concurrency concern.
-  mov rdi, [cet_r14 + task.rcvr]
+  mov arg1_rdi, [cet_r14 + task.rcvr]
   ; Other threads will access the .need field, so we must atomically decrement
   ; it.
-  lock sub dword [rdi + task.need], 1  ; 32-bit alright.
+  lock sub dword [arg1_rdi + task.need], 1  ; 32-bit alright.
   ; Supplied the final needed argument to rcvr, so schedule rcvr for execution.
   jz sched_task  ; arg1_rdi and ret_rsi are already set.
   ; Receiver needs more.
@@ -187,7 +187,7 @@ proc supply_retval:
   ; Return a value to the currently executing task's waiting receiver task,
   ; argument in arg1_rdi.  If the receiver task gets its final value, schedule
   ; the task for execution.  Return to ret_rsi.
-  ; Used registers: rax, rdx, rsi, rdi.
+  ; Used registers: rax, rdx, rsi, rdi, and those of sched_task.
 
   ; No other threads will access our currently executing task struc, so we can
   ; access it without concurrency concern.
@@ -209,25 +209,21 @@ proc supply_retval:
 
 
 proc sched_task:
-  ; Push a task in the thread's private executable-tasks stack, or if the stack
-  ; already has at least one task and another thread needs a task, try to give
-  ; the task to the needy thread.  Argument in arg1_rdi, and return to ret_rsi.
-  ; Used registers: rax, rdx, rsi, rdi.
+  ; Push a task in the thread's private executable-tasks stack; or if another
+  ; thread needs a task, try to give the task to the needy thread.  Argument in
+  ; arg1_rdi, and return to ret_rsi.
+  ; Used registers: rax, rsi, rdi.
 
   stat add qword [tds_r15d + thread.sched_calls], 1
 
-  mov rax, [tds_r15d + thread.executables]
-  test rax, rax
-  jz .in_mine_empty
-
   ; Check if another thread needs a task.
-  mov edx, [needy]
-  test edx, edx
+  mov eax, [needy]
+  test eax, eax
   jnz .give
 
 .in_mine:
+  mov rax, [tds_r15d + thread.executables]
   mov [arg1_rdi + task.next], rax
-.in_mine_empty:
   mov [tds_r15d + thread.executables], arg1_rdi
 %ifdef statistics_collection
   add qword [tds_r15d + thread.sched_mine], 1
@@ -242,11 +238,11 @@ proc sched_task:
   jmp_ind ret_rsi
 
 .give:
-  xor edx, edx
-  xchg [needy], edx  ; Locking automatically done for xchg.
-  test edx, edx
+  xor eax, eax
+  xchg [needy], eax  ; Locking automatically done for xchg.
+  test eax, eax
   unlikely jz .in_mine
-  mov [edx + thread.gift], arg1_rdi
+  mov [eax + thread.gift], arg1_rdi
   jmp_ind ret_rsi
 
 
