@@ -5,21 +5,21 @@ default rel
 %include "cabna/conv"
 
 
-global _start
+global start_threads
 global alloc_task
 global sched_task
 global notify_receiver
 global supply_retval
 global exec_avail
 global free_pet
-global main_semaphore
+global thread_main_semaphore
 
 %ifdef statistics_collection
 global print_stats
 extern printf
 %endif
 
-extern main
+extern thread_main
 extern bug
 
 
@@ -335,14 +335,11 @@ proc exec_avail:
 
 
 
-proc _start:
-  ; Entry point.
-
-  xor ebp, ebp  ; Unix ABI says to do this.
-  ; TODO?: Unix ABI says rdx is a function pointer to register with atexit.
-
+proc start_threads:
+  ; Initialize and start the threads.  This procedure is usually called by
+  ; either _start or main, but can be called whenever it is desired to start
+  ; Cabna.
   mov ebx, amount_threads
-
 .loop:
   sub ebx, 1
   jz .done
@@ -384,9 +381,9 @@ proc _start:
   jc .too_many_threads
   mov tds_r15d, eax
   ; Begin executing the user's program.
-  mov edi, ebx  ; Thread ID is the argument to main.
-  jmp main
-  ; TODO?: Call main and after do exit syscall?
+  mov edi, ebx  ; Thread ID is the argument to thread_main.
+  jmp thread_main
+  ; TODO?: Call thread_main and after do exit syscall?
 
 .mmap_failed:
   ; TODO: Negated error code is in rax, print to stderr, and do something...
@@ -763,9 +760,9 @@ allocatables_%[n]_%[a]:
 
 
 
-; The semaphore used by the main_race macro.
+; The semaphore used by the thread_main_race macro.
 
-main_semaphore: dd 1
+thread_main_semaphore: dd 1
 
 
 

@@ -1,4 +1,4 @@
-global main
+global thread_main
 extern printf
 extern dprintf
 
@@ -14,8 +14,8 @@ section .data
 
 section .text
 
-proc main:  ; (done (fibonacci count))
-  main_race
+proc thread_main:  ; (done (fibonacci count))
+  thread_main_race
 
   mov edx, count
   mov esi, fmtstr1

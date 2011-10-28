@@ -1,4 +1,4 @@
-global main
+global thread_main
 extern printf
 extern dprintf
 
@@ -14,8 +14,8 @@ section .data
 
 section .text
 
-proc main:  ; (done (summation 1 count))
-  main_race
+proc thread_main:  ; (done (summation 1 count))
+  thread_main_race
 
   mov rcx, count
   mov edx, 1

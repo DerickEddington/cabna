@@ -17,7 +17,7 @@ done
 
 for T in $tests_libc
 do
-  gcc -Wall -O1 -g -o $T.exe c-start.c impl.o bug.o $T.o
+  gcc -Wall -O1 -g -o $T.exe c-main.c impl.o bug.o $T.o
 done
 
 for T in $tests_all
