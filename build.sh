@@ -1,7 +1,7 @@
 #! /bin/bash
 
 tests_solo="tests/quicksort tests/counter tests/counter-reuse"
-tests_libc="tests/summation tests/fibonacci tests/fibonacci-limited"
+tests_libc="tests/summation tests/fibonacci tests/fibonacci-limited tests/tbb/sudoku"
 tests_all="$tests_solo $tests_libc"
 
 rm -f {.,tests}/*.{o,lf,exe,od}
@@ -17,7 +17,7 @@ done
 
 for T in $tests_libc
 do
-  ld -o $T.exe -I /lib64/ld-linux-x86-64.so.2 -l c impl.o bug.o $T.o
+  gcc -Wall -O1 -g -o $T.exe c-start.c impl.o bug.o $T.o
 done
 
 for T in $tests_all

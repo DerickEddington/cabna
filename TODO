@@ -19,6 +19,8 @@ work too much and suffering excess Cabna overhead.
 Investigate if changing dword to qword where possible in impl affects
 performance, and about changing 32-bit ops to 64-bit.
 
+Test programs don't declare "default rel".  I think they should.
+
 Review adding more comments for new designs.
 
 Rename conv file to ?
