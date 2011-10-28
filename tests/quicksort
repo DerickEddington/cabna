@@ -127,7 +127,7 @@ proc quicksort:
   cmp rax, 2 * 8
   jb .maybe_right
 
-  add dword [cet_r14 + task.need], 1
+  add dword [cet_r14 + task.need], 1  ; PROBLEM
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], quicksort
   mov [arg1_rdi + task.arg1], s
@@ -146,8 +146,12 @@ proc quicksort:
   jz .yes_right  ; No left.
   jmp_ret sched_task  ; arg1_rdi set to left.
 
+  ; PROBLEM: First task might finish before cet_r14's task.need is incremented
+  ; below.  If it does finish before, it'll think the receiver got its final
+  ; value, but that's a mistake.
+
 .yes_right:
-  add dword [cet_r14 + task.need], 1
+  add dword [cet_r14 + task.need], 1  ; PROBLEM
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], quicksort
   mov [arg1_rdi + task.arg1], l
