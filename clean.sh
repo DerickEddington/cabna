@@ -1,4 +1,4 @@
-dirs=". tests tests/tbb"
+dirs=". sys sys/sched-exec sys/task-alloc lib tests tests/tbb"
 exts=".o .lf .od .exe ~"
 
 for D in $dirs

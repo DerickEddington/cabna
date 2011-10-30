@@ -2,7 +2,7 @@ global thread_main
 extern printf
 extern dprintf
 
-%include "cabna/iface"
+%include "cabna/sys/iface"
 
 %assign count 43
 

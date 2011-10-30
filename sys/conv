@@ -6,7 +6,7 @@
 %assign call_stack_size 4 * 4096
 
 ; The amount of pre-allocated free task strucs per thread.
-%assign statically_allocated_free_tasks 128  ; 16 KB
+%assign amount_prealloc_tasks 128  ; 16 KB
 
 ; The amount of task strucs to allocate per mmap, per thread, when more are
 ; needed.
@@ -67,13 +67,13 @@
 ; Instances of all the below struc types must be aligned at 8-byte boundary, so
 ; that loads and stores of the fields are atomic.  Instances of task strucs must
 ; be aligned at 128-byte boundary, for processor bus locking efficiency.  Those
-; statically allocated in the .data section are properly aligned, because the
-; section is specified to be aligned at 128-byte and the strucs are specified to
-; be aligned at 128-byte.  Because all the strucs have qword fields, this
-; preserves the correct 8-byte alignment.  Because task strucs are 128 bytes
-; long, this preserves the correct 128-byte alignment when they are located
-; contiguously.  Task strucs dynamically allocated by mmap are properly aligned,
-; because mmap allocates pages on page boundary.
+; pre-allocated in the .data section are properly aligned, because the section
+; is specified to be aligned at 128-byte and the strucs are specified to be
+; aligned at 128-byte.  Because all the strucs have qword fields, this preserves
+; the correct 8-byte alignment.  Because task strucs are 128 bytes long, this
+; preserves the correct 128-byte alignment when they are located contiguously.
+; Task strucs dynamically allocated by mmap are properly aligned, because mmap
+; allocates pages on page boundary.
 
 ; TODO?: The .need field could be the lower bits of the .next field, and the
 ; .ridx field could be the lower bits of the .rcvr field, because the .next and
@@ -178,8 +178,8 @@ endstruc
   %warning "call_stack_size, " call_stack_size ", not a multiple of page size."
 %endif
 
-%if statically_allocated_free_tasks < 2
-  %fatal "statically_allocated_free_tasks, " statically_allocated_free_tasks ", less than 2."
+%if amount_prealloc_tasks < 2
+  %fatal "amount_prealloc_tasks, " amount_prealloc_tasks ", less than 2."
 %endif
 
 %if mmap_tasks < 1

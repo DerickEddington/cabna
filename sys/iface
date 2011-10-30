@@ -1,13 +1,13 @@
-%include "cabna/conv"
+%include "cabna/sys/conv"
 
 extern start_threads
+extern thread_main_semaphore
 extern alloc_task
+extern free_pet
 extern sched_task
+extern exec_avail
 extern notify_receiver
 extern supply_retval
-extern exec_avail
-extern free_pet
-extern thread_main_semaphore
 
 %ifdef statistics_collection
 extern print_stats

@@ -1,7 +1,7 @@
 global _start
 global thread_main
 
-%include "cabna/iface"
+%include "cabna/sys/iface"
 
 %assign count 100_000_000
 
