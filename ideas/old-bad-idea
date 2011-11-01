@@ -1,0 +1,40 @@
+Investigate a different scheduler/executor (instead of the needy/task-gifting
+work sharing): Have a special extra thread that manages a global
+executable-tasks data structure.  Tasks are concurrently made executable by
+pushing them onto a global FIFO, via my simple single-consumer multi-producer
+lock-free stack-FIFO design.  A Futex will be used to wake the manager thread
+when needed.  Needy threads submit requests for a task via another FIFO of same
+type.  Manager thread gives a task to a requesting thread.  Another futex will
+be used to wake needy/request-fulfilled threads.
+
+Or: Don't have special extra manager thread, but have mutex-protected design for
+a needy thread to get an executable task from global D.S.  Tasks are made
+executable via FIFO same as above.  Needy threads race to hold mutex.  Futex
+used for other needy threads to sleep while waiting for mutex.  Perhaps same
+futex can be used by a thread that schedules a new executable task to test
+whether that thread should futex-wake a needy thread, which would solve the
+issue of needing to wake some needy thread when previously there were no
+executable tasks available and all needy threads were waiting.
+
+Actually: No manager thread, and no mutex.  Use lock-free multi-producer and
+multi-consumer FIFO that avoids ABA problem with 64-bit counter and cmpxchg16b.
+FIFO state is represented by struc so that pointer to struc can be atomically
+updated via the cmpxchg16b.  The state strucs can be statically allocated per
+thread (2 each, to avoid a thread reusing a current-state struc) I think.  -
+Nope doesn't work: 2 state strucs per thread is not enough.  Would need
+number-threads^2 state strucs and free-list allocation management, I think.
+
+----------------------------------------------------------------------
+
+Executable-tasks data structure is also the tree linking tasks to their
+receivers.  In addition to specifying its receiver, a task specifies its
+children.  A task field points to an executable task when the task still needs
+to be executed, and the field receives the task's return value when the task is
+done.  Multiple threads search the trees for available work (maybe via
+backtracking, because this is effectively similar to stack-based order).  Doing
+that requires careful concurrency safety and atomic operations.  The original
+motivation for this idea is to support aborting a subtree of computation
+(e.g. when a result is found).  However, if one thread says to abort a subtree,
+another thread might already be committed to executing a part of it and might
+spend too much time executing it when it should have aborted but doesn't yet
+know the subtree is aborted, or worse continuing is erroneous.

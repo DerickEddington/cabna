@@ -1,22 +1,18 @@
+Investigate redesigning executable-tasks sharing.  Current design is susceptible
+to not sharing work, because OS scheduling can prevent a thread from running and
+indicating it's needy until too late after another thread kept a task, because
+when the other thread checked to give, the needy thread hadn't yet been able to
+indicate it's needy.  A needy thread must be able to get an available task
+whenever it needs.
+
 Investigate using futuxes to make needy threads suspend so they're not consuming
-CPU.  There are two points where they should suspend: while waiting for the
-needy variable, and for their gift variable.  If the design changes to use a
-global executable-tasks data structure, futex suspension would be used when
-waiting for the D.S. to become non-empty.
+CPU.
 
 Investigate giving orphans to their owner only when the amount of orphans a
 thread holds reaches a limit.  This will avoid doing as many atomic operations.
 Various options exist: the limit could be per-owner; orphans could be returned
 to their owner in a batch; sorting by owner seems necessary for the previous two
 options.
-
-Investigate redesigning to have a single global executable-tasks data structure,
-using a lock-free non-blocking multi-producer multi-consumer stack/LIFO or
-deque.  Current design is susceptible to not sharing work, because OS scheduling
-can prevent a thread from running and indicating it's needy until too late after
-another thread kept a task, because when the other thread checked to give, the
-needy thread hadn't yet been able to indicate it's needy.  With a global
-multi-access D.S., a needy thread can take an available task whenever it needs.
 
 Investigate if changing dword to qword where possible in impl affects
 performance, and about changing 32-bit ops to 64-bit.
@@ -26,7 +22,7 @@ This would allow cache_line_size=64, for CPUs where it's as efficient, which
 would result in smaller memory usage.  Does the memory usage need to be a
 concern though?
 
-Investigate making amount_threads a runtime in-memory variable, so that programs
+Investigate making amount_threads a runtime function, so that programs
 can divide their work based on the amount of threads, instead of dividing their
 work too much and suffering excess Cabna overhead.
 
@@ -65,6 +61,13 @@ the parallel processing without having a compiler.  Useful parallel programs
 (including a compiler) can be interpreted.
 
 Get rid of "bug" module.
+
+Investigate supporting potential use of Cabna chunks, and their memory
+management, by users' programs as fundamental memory unit, similar to
+FreshBreeze.  This seems desirable because programs that want to do such memory
+structuring can use the Cabna facility that is concurrency-safe. -- But the
+current task/chunk allocator does not support freeing memory back to the OS,
+because supporting that would add a lot of complexity.
 
 Investigate what NASM directives are neccessary to make a shared library.
 

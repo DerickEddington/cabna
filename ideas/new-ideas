@@ -1,0 +1,62 @@
+New work-stealing design: Per-thread deque that owner thread pushes and pops at
+the end of, and other needy threads pop at the front of.  This type of deque is
+lock-free, is single-producer multi-consumer, and avoids ABA problem with 64-bit
+counter and cmpxchg16b.
+
+This causes good ordering of task execution: owner thread usually executes its
+most-recently scheduled task (like traditional stack-based procedure calling)
+and other needy threads might execute owner's oldest scheduled tasks.  This is
+better because parallel computation usually is structured as a tree of tasks,
+and this new design will usually result in depth-first task allocation and
+execution, which is critical for memory usage efficiency (a FIFO order of task
+scheduling/execution results in breadth-first progression that can cause task
+allocation explosion).
+
+Deque will be implemented as doubly-linked list of task struc nodes.  Task struc
+will have new "prev" field.  Current task struc memory manager will be revised
+to be a chunk struc manager and chunks will be used for two purposes: task
+strucs (including task strucs used as deque nodes) and deque state struc needed
+for atomic updating of multi-word deque state.  To update a deque: allocate new
+chunk for new state struc, read ABA counter and then read pointer to current
+state struc, fill new state struc based on current state updated according to
+desired operation (push/enqueue, pop, or dequeue), cmpxchg16b (old-ABA,old-state
+-> new-ABA,new-state) to attempt atomic update of deque, if cmpxchg16b fails,
+retry reusing same new-state struc.
+
+Maybe have functionality to allocate two chunks at once, for common case of
+creating new task and scheduling it.  This should be more efficient than two
+allocations for needed task struc and deque state struc.
+
+Alternatively, deque could be implemented as fixed-length circular buffer of
+pointers to task strucs.  Deque state is represented as two 32-bit indices in
+one 64-bit field, so that both indices and the ABA-preventing counter can fit in
+128-bit field for cmpxchg16b.  The issue of full/empty buffer distinction is
+solved by always keeping one slot unused, i.e. empty: start=end, full: end =
+start-1 modulo length.  -- But! fixed-length limits the number of scheduled
+tasks.  This precludes uses of Cabna that could take advantage of scheduling a
+very large number of tasks.
+
+----------------------------------------------------------------------
+
+Task struc has field (maybe only a bit) that indicates if the task has been
+cancelled.  The Cabna runtime checks this before executing a task, and if a task
+has been cancelled the task struc is freed - but what about resource clean-up of
+tasks that are responsible for cleaning-up things they own (e.g. their
+arguments)?  Also, currently-executing tasks can monitor their field to see if
+they've been told to cancel, and they control when they monitor and how they
+terminate themselves, to ensure they can die properly (maintain whatever
+invariants, consistency, etc.)  The field must be read and written
+atomically/lock-free for concurrency-safety.
+
+To handle clean-up, task struc could have field that points to destructor
+procedure.  Dtor is passed task struc as argument.  Task dtors could work well
+with region-based memory management - dtor would free task's region.
+
+----------------------------------------------------------------------
+
+Investigate changing design so that "receiver" tasks can accept more than one
+argument at once, i.e. so that "returning" tasks can supply more than one
+"retval" directly into multiple task.argN fields.  E.g. a receiver that takes 5
+args could get 2 at once from some task and get the other 3 at once from some
+other task.  This seems worthwhile to allow avoiding memory allocation for
+multiple return values for some cases.
