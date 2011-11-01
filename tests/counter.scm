@@ -1,0 +1,8 @@
+(library (counter)
+  (export main)
+  (import (rnrs))
+  (define (main count) (done (a count)))
+  (define (done n) n)
+  (define (a n) (b (- n 1)))
+  (define (b n) (c (- n 2)))
+  (define (c n) (if (<= n 0) n (a n))))
