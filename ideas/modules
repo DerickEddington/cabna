@@ -1,0 +1,15 @@
+E.g.: sys/sched-exec/needy-spin, sys/sched-exec/needy-mutex,
+sys/sched-exec/deque-spin, sys/sched-exec/deque-mutex;
+sys/task-alloc/orphans-incr, sys/task-alloc/orphans-batch; lib/mutex/spin,
+lib/mutex/futex-tristate, lib/mutex/futex-bivar; lib/deque-mr-mw,
+lib/stack-sr-mw, lib/stack-mr-mw, lib/fifo-sr-mw, lib/fifo-mr-mw, etc.
+
+Maybe it's a good idea to have a policy such that interchangeable modules' files
+are in a folder named for the module (e.g. sched-exec/*); and
+non-interchangeable modules' files are prefix-ed with the name of what they have
+in common (e.g. fifo-*).
+
+There are two goals here: First, interchangeable implementations offering
+different performance profiles; Second, reuseable implementations for the
+runtime and/or users.  Each goal does not need to be concerned about
+accomplishing the other goal.
