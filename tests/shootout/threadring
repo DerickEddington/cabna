@@ -1,4 +1,4 @@
-global main
+global thread_main
 extern printf
 
 %include "cabna/sys/iface"
@@ -13,8 +13,8 @@ section .data
 
 section .text
 
-proc main:
-  main_race
+proc thread_main:
+  thread_main_race
 
   mov ebx, amount_tasks
 

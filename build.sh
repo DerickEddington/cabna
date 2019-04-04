@@ -24,8 +24,10 @@ tests_solo="tests/quicksort
             tests/counter-reuse"
 
 tests_libc="tests/summation
+            tests/summation-limited
             tests/fibonacci
             tests/fibonacci-limited
+            tests/shootout/threadring
             tests/tbb/sudoku"
 
 tests_all="$tests_solo $tests_libc"
@@ -44,7 +46,7 @@ done
 
 for T in $tests_libc
 do
-  gcc_opts="-Wall -O1 -g"
+  gcc_opts="-Wall -no-pie -O1 -g"
   gcc  $gcc_opts  -o $T.exe  sys/c-main.c  $sys_obj  $T.o
 done
 
