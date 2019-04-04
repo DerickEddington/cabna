@@ -2,7 +2,7 @@ global thread_main
 extern printf
 extern dprintf
 
-%include "cabna/sys/iface"
+%include "cabna/sys/iface.nasm"
 
 %assign count 43
 
@@ -31,6 +31,7 @@ proc thread_main:  ; (done (fibonacci count))
   jmp_ret alloc_task
   mov qword [arg1_rdi + task.exec], fibonacci
   mov qword [arg1_rdi + task.arg1], count
+  mov qword [arg1_rdi + task.arg2], amount_threads - 1
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
   mov cet_r14, arg1_rdi
@@ -57,17 +58,12 @@ proc done:  ; Print value and exit program.
 
 proc fibonacci:
   mov rbx, [cet_r14 + task.arg1]
-
-; %ifdef statistics_collection
-;   mov rdx, rbx
-;   mov esi, fmtstr3
-;   mov edi, 2  ; stderr
-;   mov eax, 0
-;   call dprintf  ; Use dprintf to stderr because it flushes immediately.
-; %endif
-
+  mov r12, [cet_r14 + task.arg2]
+.start:
   test rbx, -2
   jz .return
+  sub r12, 1
+  jc .serial_both
 
   ; Reuse task struc for the tail-call.
   mov qword [cet_r14 + task.exec], addition
@@ -77,23 +73,61 @@ proc fibonacci:
   mov qword [arg1_rdi + task.exec], fibonacci
   sub rbx, 1
   mov [arg1_rdi + task.arg1], rbx
+  mov [arg1_rdi + task.arg2], r12
   mov [arg1_rdi + task.rcvr], cet_r14
   mov qword [arg1_rdi + task.ridx], 1
   jmp_ret sched_task  ; arg1_rdi already set
 
+  test r12, r12
+  jz .serial_one
+
   jmp_ret alloc_task
-  mov qword [arg1_rdi + task.exec], fibonacci
+  ; mov qword [arg1_rdi + task.exec], fibonacci
   sub rbx, 1
-  mov [arg1_rdi + task.arg1], rbx
+  ; mov [arg1_rdi + task.arg1], rbx
+  ; mov [arg1_rdi + task.arg2], r12
   mov [arg1_rdi + task.rcvr], cet_r14
   mov qword [arg1_rdi + task.ridx], 2
   mov cet_r14, arg1_rdi
-  jmp fibonacci
+  jmp .start
 
 .return:
   mov arg1_rdi, rbx
   jmp_ret supply_retval
   jmp_ret_to free_pet, exec_avail
+
+.serial_both:
+  call fibonacci_serial  ; rbx already correct.
+  jmp_ret supply_retval
+  jmp_ret_to free_pet, exec_avail
+
+.serial_one:
+  sub rbx, 1  ; Two less than CET's argument.
+  call fibonacci_serial
+  mov [cet_r14 + task.arg2], arg1_rdi
+  lock sub qword [cet_r14 + task.need], 1
+  jz addition
+  jmp exec_avail
+
+
+
+
+proc fibonacci_serial:
+  test rbx, -2
+  jz .return
+  sub rbx, 1
+  push rbx
+  call fibonacci_serial
+  pop rbx
+  sub rbx, 1
+  push arg1_rdi
+  call fibonacci_serial
+  pop rax
+  add arg1_rdi, rax
+  ret
+.return:
+  mov arg1_rdi, rbx
+  ret
 
 
 

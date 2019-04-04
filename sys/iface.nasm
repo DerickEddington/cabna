@@ -1,4 +1,4 @@
-%include "cabna/sys/conv"
+%include "cabna/sys/conv.nasm"
 
 extern start_threads
 extern thread_main_semaphore

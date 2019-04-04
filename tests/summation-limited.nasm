@@ -2,7 +2,7 @@ global thread_main
 extern printf
 extern dprintf
 
-%include "cabna/sys/iface"
+%include "cabna/sys/iface.nasm"
 
 %assign count 1_000_000_000
 
@@ -34,6 +34,7 @@ proc thread_main:  ; (done (summation 1 count))
   mov qword [arg1_rdi + task.arg1], 1
   mov rax, count
   mov qword [arg1_rdi + task.arg2], rax
+  mov qword [arg1_rdi + task.arg3], amount_threads - 1
   mov [arg1_rdi + task.rcvr], rbx
   mov qword [arg1_rdi + task.ridx], 1
   mov cet_r14, arg1_rdi
@@ -77,6 +78,8 @@ proc summation:
   jmp_ret_to free_pet, exec_avail
 
 .continue_2:
+  ; TODO: Use arg3 and divide work for threads.
+
   ; Reuse task struc for the tail-call.
   mov qword [cet_r14 + task.exec], addition
   mov qword [cet_r14 + task.need], 2

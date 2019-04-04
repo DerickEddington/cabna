@@ -1,4 +1,4 @@
-%include "cabna/sys/conv"
+%include "cabna/sys/conv.nasm"
 
 
 section .data  align=128

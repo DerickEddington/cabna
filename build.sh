@@ -36,7 +36,7 @@ tests_all="$tests_solo $tests_libc"
 for F in  $sys_src  $lib_src  $tests_all
 do
   nasm_opts="-Ox  -g -F dwarf  -l $F.lf"
-  nasm  -f elf64  $nasm_opts  -I ../  $F
+  nasm  -f elf64  $nasm_opts  -I ../  -o $F.o  $F.nasm
 done
 
 for T in $tests_solo

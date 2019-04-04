@@ -9,7 +9,7 @@ extern perror
 
 default rel
 
-%include "cabna/sys/iface"
+%include "cabna/sys/iface.nasm"
 
 %assign board_dim   9
 %assign board_size  board_dim * board_dim

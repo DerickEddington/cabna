@@ -1,7 +1,7 @@
 global thread_main
 extern printf
 
-%include "cabna/sys/iface"
+%include "cabna/sys/iface.nasm"
 
 %assign amount_tasks 503
 %assign count 50_000_000

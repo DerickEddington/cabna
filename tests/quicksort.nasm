@@ -1,7 +1,7 @@
 global _start
 global thread_main
 
-%include "cabna/sys/iface"
+%include "cabna/sys/iface.nasm"
 
 %assign array_size   (16 << 20)
 %assign file_length  (8 * array_size)

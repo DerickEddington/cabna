@@ -2,7 +2,7 @@ bits 64
 default rel
 
 
-%include "cabna/sys/conv"
+%include "cabna/sys/conv.nasm"
 
 
 global print_stats
