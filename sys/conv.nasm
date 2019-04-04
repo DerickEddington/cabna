@@ -12,8 +12,6 @@
 ; needed.
 %assign mmap_tasks 2048  ; 256 KB
 
-;%define statistics_collection
-
 ;--- Internal. Do not modify. --------------------------------------------------
 
 ; These registers are reserved for the runtime system and must not be mutated by
